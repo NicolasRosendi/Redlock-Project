@@ -8,7 +8,7 @@ signal notified(text: String, color: Color)
 signal special_used(player: Player, sid: String)
 signal goal_scored(team: Team, scorer: Player)
 
-enum Phase { KICKOFF, PLAY, RESTART, GOAL, FULLTIME }
+enum Phase { KICKOFF, PLAY, RESTART, GOAL, FULLTIME, HALFTIME }
 
 const PATH_STEP := 0.05
 const PATH_TIME := 3.0
@@ -45,6 +45,13 @@ var circle_r := 9.15
 var time := 0.0
 var clock := 0.0
 var duration := 300.0
+## Dos tiempos con descuento. `half_clock` son segundos reales del tiempo actual.
+var half := 1
+var half_clock := 0.0
+var half_len := 150.0
+var added_min := 0
+var _stoppage := 0.0
+var _first_kickoff := 0
 var phase: int = Phase.KICKOFF
 var phase_time := 0.0
 var fatigue_rate := 0.12
@@ -63,6 +70,7 @@ var stats := {
 	"passes": 0, "passes_done": 0, "shots": 0, "on_target": 0, "goals": 0, "tackles": 0,
 	"interceptions": 0, "saves": 0, "outs": 0, "fouls": 0, "specials": 0, "skill_moves": 0,
 	"dribbles": 0, "feints": 0, "woodwork": 0, "headers": 0, "tackle_attempts": 0, "evades": 0, "resists": 0,
+	"corners": 0, "throw_ins": 0, "goal_kicks": 0,
 }
 
 var _pass_marker: MeshInstance3D
@@ -82,6 +90,7 @@ func _ready() -> void:
 	FX.world = self
 	difficulty = GameConfig.difficulty
 	duration = GameConfig.match_minutes * 60.0
+	half_len = duration * 0.5
 	fatigue_rate = 0.12 * clampf(5.0 / GameConfig.match_minutes, 0.4, 1.6)
 	_setup_dims(GameConfig.team_size)
 	_build_world()
@@ -242,12 +251,26 @@ func _physics_process(dt: float) -> void:
 		Phase.GOAL:
 			if phase_time > 3.2:
 				_kickoff(_kickoff_team)
+		Phase.HALFTIME:
+			if phase_time > 4.0:
+				_start_second_half()
 		Phase.PLAY:
 			_restart_watchdog()
 	if phase == Phase.PLAY or phase == Phase.RESTART:
 		clock += dt
-		if clock >= duration and phase == Phase.PLAY:
-			_full_time()
+		half_clock += dt
+		if added_min == 0 and half_clock >= half_len - 0.3:
+			# Descuento según faltas, corners, goles y saques del tiempo
+			added_min = clampi(roundi(1.0 + _stoppage), 1, 6)
+			notify("+%d minuto%s de descuento" % [added_min, "" if added_min == 1 else "s"], Color(1.0, 0.85, 0.35))
+			if hud != null:
+				hud.show_added_time(added_min)
+		if added_min > 0 and half_clock >= half_len + added_min * duration / 90.0 and phase == Phase.PLAY:
+			if half == 1:
+				_half_time()
+			else:
+				_full_time()
+	_enforce_restart_distance()
 
 	if ball.carrier == null:
 		ball_path = ball.predict(PATH_TIME, PATH_STEP)
@@ -286,6 +309,94 @@ func _physics_process(dt: float) -> void:
 	elif phase == Phase.PLAY and ball.carrier != null and not ball.carrier.restart_lock:
 		_check_out()
 	_update_markers()
+
+
+func clock_text() -> String:
+	var base := 0 if half == 1 else 45
+	var mins := half_clock / half_len * 45.0
+	if mins <= 45.0:
+		return "%d'" % (base + int(mins))
+	return "%d+%d'" % [base + 45, ceili(mins - 45.0)]
+
+
+func add_stoppage(display_minutes: float) -> void:
+	_stoppage += display_minutes
+
+
+func _half_time() -> void:
+	_set_phase(Phase.HALFTIME)
+	FX.reset()
+	for p in players:
+		p.charge_kind = ""
+		p.pending = {}
+		p.velocity = Vector3.ZERO
+		p.frozen = true
+	notify("Entretiempo", Color(1.0, 0.85, 0.35))
+	if hud != null:
+		hud.show_banner("ENTRETIEMPO", "%s %d - %d %s" % [teams[0].short_name, teams[0].score, teams[1].score, teams[1].short_name], Color(1.0, 0.85, 0.35), 3.0)
+
+
+## Segundo tiempo: se cambia de lado y se recupera parte de la estamina.
+func _start_second_half() -> void:
+	half = 2
+	half_clock = 0.0
+	added_min = 0
+	_stoppage = 0.0
+	for t in teams:
+		t.attack_sign = -t.attack_sign
+	for p in players:
+		p.stamina_cap = minf(100.0, p.stamina_cap + (100.0 - p.stamina_cap) * 0.6)
+		p.stamina = p.stamina_cap
+	notify("Segundo tiempo · estamina recuperada", Color(0.6, 1.0, 0.7))
+	_kickoff(1 - _first_kickoff)
+
+
+## Durante un saque, los rivales respetan la distancia mínima (y en el saque
+## del medio cada equipo se queda en su campo).
+func _enforce_restart_distance() -> void:
+	if _restart.is_empty():
+		return
+	var taker: Player = _restart["taker"]
+	if not taker.restart_lock:
+		return
+	var kind: String = _restart["kind"]
+	var spot := Vector3(ball.position.x, 0.0, ball.position.z)
+	var k := clampf(hl / 52.5, 0.5, 1.0)
+	var r := 9.15 * k
+	match kind:
+		"kickoff":
+			r = circle_r + 0.3
+		"throw_in":
+			r = 4.0
+		"goal_kick":
+			r = 0.0
+	for t in teams:
+		for p in t.players:
+			if p == taker:
+				continue
+			var opp := t != taker.team
+			if kind == "kickoff":
+				# Todos en su propio campo
+				if t.progress(p.position.x) > 0.495:
+					p.position.x = t.field_point(0.495, 0.0).x
+			if not opp:
+				continue
+			if kind == "penalty" and p.role == Player.Role.GK:
+				continue
+			if kind == "goal_kick" or kind == "penalty":
+				var box_team: Team = taker.team if kind == "goal_kick" else t
+				if in_box(box_team, p.position) and p.role != Player.Role.GK:
+					p.position.x = box_team.own_goal().x + box_team.attack_dir().x * (box_d + 0.6)
+				continue
+			var d := flat_dist(p.position, spot)
+			if d < r:
+				var away := p.position - spot
+				away.y = 0.0
+				if away.length() < 0.05:
+					away = -taker.team.attack_dir()
+				var np := clamp_in_field(spot + away.normalized() * r, -2.0)
+				p.position.x = np.x
+				p.position.z = np.z
 
 
 func _set_phase(ph: int) -> void:
@@ -329,6 +440,8 @@ func _resolve_touches() -> void:
 	for p in players:
 		if not p.can_touch() or b.tried.has(p):
 			continue
+		if b.shot_result == "goal" and b.kick_kind == "shot" and time >= p.wall_until:
+			continue
 		if b.shield_team >= 0 and p.team_id != b.shield_team and p.state != Player.State.DASH and time >= p.wall_until:
 			continue
 		var dh := flat_dist(b.position, p.position)
@@ -343,6 +456,8 @@ func _resolve_touches() -> void:
 		var type := "foot"
 		if hands:
 			reach = 1.0 if p.state != Player.State.DIVE else 1.6
+			if b.shot_result == "save":
+				reach += 0.8
 			if bh > 2.5:
 				continue
 			type = "hands"
@@ -412,7 +527,7 @@ func _attempt_touch(p: Player, type: String) -> void:
 				_interception(p)
 			return
 	if is_shot or speed > 22.0:
-		var v := -b.velocity * 0.25 + Vector3(randf_range(-3, 3), randf_range(1, 4), randf_range(-3, 3))
+		var v := b.velocity * randf_range(-0.3, 0.45) + Vector3(randf_range(-4, 4), randf_range(1, 5), randf_range(-4, 4))
 		b.kick(p, v, "deflect")
 		p.gain_energy(SkillDB.GAIN["block"])
 		notify("¡Bloqueo de %s!" % p.player_name, p.team.color.lightened(0.3))
@@ -450,14 +565,17 @@ func _gk_touch(gk: Player) -> void:
 	var toward := b.velocity.x * -gk.team.attack_sign > 2.0
 	var chance := 0.97
 	var shotlike := b.kick_kind == "shot" or (toward and speed > 14.0)
-	if shotlike:
+	if b.shot_result == "save":
+		chance = 1.0
+	elif shotlike:
 		chance = 0.56 + gk.st("reflex") * 0.45 - maxf(speed - 16.0, 0.0) * 0.02 - b.special_break
 		chance += gk_bonus(gk.team)
 		var off := Vector2(b.position.x - gk.position.x, b.position.z - gk.position.z).length()
 		chance -= maxf(off - 0.7, 0.0) * 0.3
 		if gk.state == Player.State.DIVE:
 			chance += 0.05
-	chance = clampf(chance, 0.04, 0.97)
+	if b.shot_result != "save":
+		chance = clampf(chance, 0.04, 0.97)
 	if randf() < chance:
 		if shotlike:
 			stats["saves"] += 1
@@ -470,10 +588,7 @@ func _gk_touch(gk: Player) -> void:
 				FX.ring(b.position, Color(1, 1, 1), 1.6, 0.3)
 				FX.hitstop(0.06)
 		else:
-			var away := gk.team.attack_sign
-			var pz := signf(b.position.z) if absf(b.position.z) > 0.2 else (1.0 if randf() < 0.5 else -1.0)
-			var v := Vector3(away * randf_range(4.0, 9.0), randf_range(2.0, 6.0), pz * randf_range(3.0, 9.0))
-			b.kick(gk, v, "parry")
+			b.kick(gk, _parry_velocity(gk, b), "parry")
 			notify("¡Atajada de %s!" % gk.player_name, gk.team.color.lightened(0.3))
 			FX.popup(gk.position, "¡ATAJADA!", Color(1, 1, 1), 1.2)
 			FX.burst(b.position, Color(1, 1, 1), 34, 8.0)
@@ -483,6 +598,56 @@ func _gk_touch(gk: Player) -> void:
 
 
 # ---------------------------------------------------------------- eventos
+
+## Despeje del portero: a veces al córner (por encima del travesaño o por
+## fuera del palo, con trayectoria calculada para que nunca entre), a veces
+## de vuelta al juego (rebote para el remate).
+func _parry_velocity(gk: Player, b: Ball) -> Vector3:
+	var away := gk.team.attack_sign
+	var pz := signf(b.position.z) if absf(b.position.z) > 0.2 else (1.0 if randf() < 0.5 else -1.0)
+	if randf() < 0.45:
+		return _over_or_wide(-away, b, pz)
+	return Vector3(away * randf_range(4.0, 9.0), randf_range(2.0, 6.0), pz * randf_range(3.0, 9.0))
+
+
+## Velocidad para que el balón cruce la línea de fondo del lado `sign_x`
+## por encima del travesaño o por fuera de un palo.
+func _over_or_wide(sign_x: float, b: Ball, pz: float) -> Vector3:
+	var vx := randf_range(4.0, 6.0)
+	var dx := maxf(hl - absf(b.position.x), 0.0) + 0.35
+	var t := dx / vx
+	if absf(b.position.z) > gw * 0.5 - 1.2 or randf() < 0.4:
+		var z_cross := pz * (gw * 0.5 + randf_range(0.6, 1.5))
+		return Vector3(sign_x * vx, randf_range(1.0, 3.0), (z_cross - b.position.z) / t)
+	var vy := (gh + 0.6 - b.position.y) / t + 0.5 * Ball.GRAVITY * t
+	return Vector3(sign_x * vx, vy, pz * randf_range(0.3, 1.5))
+
+
+## Un tiro resuelto como atajada/fuera que físicamente iba a entrar: el
+## portero lo toca con la punta de los dedos y sale al córner.
+func on_fingertip_save(sign_x: float, b: Ball) -> void:
+	var defending: Team = teams[0] if teams[0].attack_sign == -sign_x else teams[1]
+	var gk := defending.gk()
+	var pz := signf(b.position.z) if absf(b.position.z) > 0.2 else (1.0 if randf() < 0.5 else -1.0)
+	b.velocity = _over_or_wide(sign_x, b, pz)
+	b.side_spin = 0.0
+	b.top_spin = 0.0
+	b.knuckle = 0.0
+	b.shot_result = ""
+	b.kick_kind = "parry"
+	if gk != null:
+		b.last_touch = gk
+		stats["saves"] += 1
+		gk.gain_energy(SkillDB.GAIN["save"])
+		FX.popup(gk.position, "¡CON LA PUNTA DE LOS DEDOS!", Color(1, 1, 1), 0.9)
+		FX.hitstop(0.08)
+
+
+func on_shot_resolved(p: Player, res: Dictionary) -> void:
+	stats["shot_prob_sum"] = float(stats.get("shot_prob_sum", 0.0)) + float(res["p_goal"])
+	if p.is_human:
+		FX.popup(p.position, "GOL %d%%" % roundi(float(res["p_goal"]) * 100.0), Color(1, 1, 1, 0.9), 0.6)
+
 
 func on_possession(p: Player) -> void:
 	p.charge_kind = ""
@@ -546,6 +711,7 @@ func foul(by: Player, victim: Player) -> void:
 		return
 	stats["fouls"] += 1
 	victim.stun(0.6, true)
+	add_stoppage(0.2)
 	notify("¡Falta de %s!" % by.player_name, Color(1.0, 0.85, 0.3))
 	FX.popup(victim.position, "¡FALTA!", Color(1.0, 0.85, 0.2), 1.2)
 	FX.hitstop(0.08)
@@ -572,6 +738,7 @@ func _goal(side: float) -> void:
 			passer.gain_energy(SkillDB.GAIN["assist"])
 			FX.popup(passer.position, "¡ASISTENCIA!", scoring.color.lightened(0.5), 0.8)
 	_kickoff_team = scoring.opponent.id
+	add_stoppage(0.6)
 	_set_phase(Phase.GOAL)
 	for p in players:
 		p.charge_kind = ""
@@ -619,6 +786,15 @@ func _check_out() -> void:
 
 func _start_restart(kind: String, t: Team, spot: Vector3) -> void:
 	_set_phase(Phase.RESTART)
+	add_stoppage({"corner": 0.3, "goal_kick": 0.1, "throw_in": 0.05, "free_kick": 0.4, "penalty": 1.0}.get(kind, 0.0))
+	match kind:
+		"corner":
+			stats["corners"] += 1
+			FX.popup(spot, "CÓRNER", t.color.lightened(0.5), 1.0)
+		"throw_in":
+			stats["throw_ins"] += 1
+		"goal_kick":
+			stats["goal_kicks"] += 1
 	ball.place(spot)
 	var taker: Player
 	if kind == "goal_kick":
@@ -823,7 +999,7 @@ func _build_teams(size: int) -> void:
 
 func _make_stats(role: int, rating: float) -> Dictionary:
 	var s := {}
-	for k in ["speed", "accel", "shot_power", "shot_acc", "passing", "dribble", "tackle", "strength", "jump", "intercept", "reflex"]:
+	for k in ["speed", "accel", "shot_power", "shot_acc", "curve", "passing", "dribble", "tackle", "strength", "jump", "intercept", "reflex"]:
 		s[k] = rating + randf_range(-0.08, 0.08)
 	match role:
 		Player.Role.GK:
@@ -841,6 +1017,7 @@ func _make_stats(role: int, rating: float) -> Dictionary:
 		Player.Role.FWD:
 			s["shot_power"] += 0.12
 			s["shot_acc"] += 0.12
+			s["curve"] += 0.08
 			s["dribble"] += 0.1
 			s["speed"] += 0.06
 			s["tackle"] -= 0.12
@@ -1082,15 +1259,8 @@ func _update_markers() -> void:
 	_aim_reticle.visible = false
 	var hp: Player = human.player if human != null else null
 	if hp != null and ball.carrier == hp and (phase == Phase.PLAY or phase == Phase.RESTART):
-		var shot_kinds := ["shot", "curve", "chip"]
-		if hp.is_charging(shot_kinds) or hp.is_winding(Player.SHOT_KINDS):
-			var kind: String = hp.charge_kind if hp.charge_kind != "" else String(hp.pending.get("kind", "shot"))
-			var ch: float = hp.charge_amount() if hp.charge_kind != "" else float(hp.pending.get("charge", 0.5))
-			var tp := hp.preview_shot_point(kind, ch)
-			var inside := absf(tp.z) < gw * 0.5 and tp.y < gh
-			_aim_reticle.visible = true
-			_aim_reticle.position = Vector3(tp.x, maxf(tp.y, 0.3), clampf(tp.z, -hw, hw))
-			(_aim_reticle.material_override as StandardMaterial3D).albedo_color = Color(1, 1, 1, 0.9) if inside else Color(1.0, 0.25, 0.2, 0.9)
+		if hp.is_charging(["shot", "curve", "chip"]) or hp.is_winding(Player.SHOT_KINDS):
+			pass
 		else:
 			var kind2 := "through" if hp.is_charging(["through", "through_lob"]) else "pass"
 			var plan := hp.pass_plan(kind2, hp.charge_amount(), hp.aim_dir if hp.aim_active else hp.facing)

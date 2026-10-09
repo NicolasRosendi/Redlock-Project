@@ -184,8 +184,9 @@ func _process(_delta: float) -> void:
 	var t0 := m.teams[0]
 	var t1 := m.teams[1]
 	_score.text = "%s %d - %d %s" % [t0.short_name, t0.score, t1.score, t1.short_name]
-	var mins := int(m.clock / m.duration * 90.0)
-	_clock.text = "%d'" % mins
+	_clock.text = m.clock_text()
+	if m.added_min > 0 and m.phase != Match.Phase.HALFTIME:
+		_clock.text += "  (+%d)" % m.added_min
 	if Input.is_action_just_pressed("help"):
 		_toggle_help()
 	if Input.is_action_just_pressed("pause") and m.phase != Match.Phase.FULLTIME:
@@ -238,6 +239,14 @@ func _animate_real_time() -> void:
 
 func show_goal(t: Team, scorer_name: String) -> void:
 	_show_banner("¡GOOOOL!", "%s · %s" % [scorer_name, t.team_name], t.color.lightened(0.35), 2.4)
+
+
+func show_banner(text: String, sub: String, col: Color, hold: float) -> void:
+	_show_banner(text, sub, col, hold)
+
+
+func show_added_time(mins: int) -> void:
+	_show_banner("+%d" % mins, "minuto%s de descuento" % ("" if mins == 1 else "s"), Color(1.0, 0.85, 0.35), 1.2)
 
 
 func flash_energy() -> void:

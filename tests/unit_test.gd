@@ -8,6 +8,9 @@ var _shots: Array = []
 var _cur := -1
 var _t := 0.0
 var _results := {"goal": 0, "save": 0, "miss": 0}
+var _decided := ""
+var _agree := 0
+var _prob_sum := 0.0
 var _done := false
 
 
@@ -117,6 +120,9 @@ func _physics_process(dt: float) -> void:
 		if p != gk and p != shooter:
 			p.frozen = true
 			p.position = Vector3(-40, 0, -30 + p.get_index() * 0.5)
+	if _cur >= 0 and _decided == "?" and b.kick_kind == "shot":
+		_decided = b.shot_result
+		_prob_sum += b.shot_prob
 	if _cur >= 0:
 		# Esperar resultado
 		var outcome := ""
@@ -129,14 +135,17 @@ func _physics_process(dt: float) -> void:
 		if outcome == "":
 			return
 		_results[outcome] += 1
+		if (_decided == "goal") == (outcome == "goal"):
+			_agree += 1
 		if OS.get_environment("GKDEBUG") != "":
 			print("  %s touched=%s state=%d gkpos=(%.1f,%.1f) ball=(%.1f,%.1f,%.1f) speed=%.1f" % [outcome, b.tried.has(gk), gk.state, gk.position.x, gk.position.z, b.position.x, b.position.y, b.position.z, b.velocity.length()])
 	_cur += 1
 	if _cur >= _shots.size():
 		_done = true
 		var total := float(_shots.size())
-		print("PORTERO vs tiros normales (12-24 m): goles %d, atajadas %d, fuera %d" % [_results["goal"], _results["save"], _results["miss"]])
+		print("RULETA tiros normales (12-24 m): goles %d, atajadas %d, fuera %d · prob. media de gol %.0f%%" % [_results["goal"], _results["save"], _results["miss"], _prob_sum / total * 100.0])
 		_check("ratio gol razonable", _results["goal"] / total < 0.55, "%.0f%% goles" % (_results["goal"] / total * 100.0))
+		_check("la física respeta lo que decidió la ruleta", _agree >= int(total) - 2, "%d/%d coinciden" % [_agree, int(total)])
 		print("FAILURES: %d" % failures)
 		get_tree().quit()
 		return
@@ -157,4 +166,5 @@ func _physics_process(dt: float) -> void:
 	shooter.aim_dir = Vector3(0.6, 0, s["aim"]).normalized()
 	shooter.aim_active = true
 	shooter.perform("shot", s["charge"], {})
+	_decided = "?"
 	_t = 0.0

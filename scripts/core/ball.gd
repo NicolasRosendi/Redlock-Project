@@ -43,6 +43,9 @@ var special_break := 0.0
 var in_goal := false
 var tried := {}
 var carry_vel := Vector3.ZERO
+## Resultado del tiro decidido por la "ruleta" ("goal", "save", "miss" o "").
+var shot_result := ""
+var shot_prob := 0.0
 
 var _mesh: MeshInstance3D
 var _shadow: MeshInstance3D
@@ -214,6 +217,7 @@ func kick(by: Player, vel: Vector3, kind: String, side := 0.0, top := 0.0) -> vo
 	vision_pass = false
 	special_id = ""
 	special_break = 0.0
+	shot_result = ""
 	tried.clear()
 	position.y = maxf(position.y, RADIUS)
 	set_trail(vel.length() > 26.0, Color(1, 1, 1, 0.5))
@@ -245,6 +249,7 @@ func set_carrier(p: Player, cushion := false) -> void:
 	special_id = ""
 	special_break = 0.0
 	kick_kind = "carry"
+	shot_result = ""
 	in_goal = false
 	tried.clear()
 	set_trail(false)
@@ -266,6 +271,7 @@ func place(pos: Vector3) -> void:
 	knuckle = 0.0
 	in_goal = false
 	kick_kind = ""
+	shot_result = ""
 	pass_target = null
 	shield_team = -1
 	special_id = ""
@@ -382,6 +388,13 @@ func collide_goal(sign_x: float, hl: float, gw: float, gh: float, depth: float) 
 			position += n2 * (r - dl2)
 			_reflect(n2, 0.65)
 			m.on_woodwork()
+	# La ruleta dijo que no era gol pero el balón va adentro: el portero lo
+	# toca con la punta de los dedos justo antes de la línea
+	var to_line := hl - absf(position.x)
+	if (shot_result == "save" or shot_result == "miss") and signf(position.x) == sign_x \
+			and to_line < 0.7 and velocity.x * sign_x > 0.0 \
+			and absf(position.z) < gw * 0.5 + RADIUS and position.y < gh + RADIUS:
+		m.on_fingertip_save(sign_x, self)
 	var crossed := absf(position.x) > hl + RADIUS and signf(position.x) == sign_x \
 		and absf(position.z) < gw * 0.5 and position.y < gh
 	if crossed:

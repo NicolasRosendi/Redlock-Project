@@ -746,54 +746,150 @@ func _lob_apex(kind: String, d: float) -> float:
 	return clampf(2.0 + d * 0.11, 2.0, 9.0)
 
 
-## Punto del arco al que apunta el stick (antes del error aleatorio).
-## Funciona como un giroscopio: el balón va hacia donde apunta el stick.
-## Con el stick suelto, apunta solo al palo contrario del portero.
-func _shot_aim(kind: String, charge: float, aim: Vector3, active: bool, opts: Dictionary) -> Vector3:
+## Intención del tiro: el punto del arco al que "más o menos" apunta el stick.
+## Si el stick apunta cerca de un palo se entiende como esa esquina; si apunta
+## al centro, al centro; si apunta lejos del arco, el tiro va afuera (a
+## propósito). Con el stick suelto, al palo contrario del portero. La altura
+## sale de la potencia (poca = abajo, mucha = arriba).
+func shot_intent(kind: String, charge: float, aim: Vector3, active: bool, opts: Dictionary) -> Vector3:
 	var from := m.ball.position
 	var goal := team.opp_goal()
 	var half := m.gw * 0.5
+	var corner := half - 0.45
 	var z_aim: float
 	if opts.has("z"):
 		z_aim = opts["z"]
 	elif not active:
 		var gk := team.opponent.gk()
 		var gz := gk.position.z if gk != null else 0.0
-		# Asistido: hacia el palo contrario, pero no a la escuadra perfecta
 		if absf(gz) > 0.3:
-			z_aim = -signf(gz) * (half - 1.0)
+			z_aim = -signf(gz) * corner
 		elif absf(from.z) > 1.5:
-			z_aim = -signf(from.z) * (half - 1.0)
+			z_aim = -signf(from.z) * corner
 		else:
-			z_aim = half - 1.0
+			z_aim = corner * (1.0 if randf() < 0.5 else -1.0)
 	else:
 		var to_center := Vector3(goal.x - from.x, 0.0, goal.z - from.z).normalized()
-		var theta := clampf(to_center.signed_angle_to(Vector3(aim.x, 0.0, aim.z), Vector3.UP) * 0.5, -1.2, 1.2)
+		var theta := clampf(to_center.signed_angle_to(Vector3(aim.x, 0.0, aim.z), Vector3.UP), -1.3, 1.3)
 		var dir := to_center.rotated(Vector3.UP, theta)
 		var dx := goal.x - from.x
+		var z_ray: float
 		if absf(dir.x) < 0.08 or signf(dir.x) != signf(dx):
-			z_aim = signf(dir.z) * (half + 25.0)
+			z_ray = signf(dir.z) * (half + 15.0)
 		else:
-			z_aim = from.z + dir.z * dx / dir.x
-		# Asistencia: si apuntas cerca del arco, el tiro se mete dentro
-		if absf(z_aim) < half + 1.2:
-			z_aim = clampf(z_aim, -(half - 0.35), half - 0.35)
-	var y_aim: float = opts.get("y", lerpf(0.3, m.gh - 0.45, clampf(charge / 0.85, 0.0, 1.0)))
+			z_ray = from.z + dir.z * dx / dir.x
+		if absf(z_ray) > half + 6.0:
+			z_aim = clampf(z_ray, -(half + 15.0), half + 15.0)
+		elif absf(z_ray) > half * 0.4:
+			z_aim = signf(z_ray) * corner
+		else:
+			z_aim = z_ray
+	var y_aim: float = opts.get("y", lerpf(0.35, m.gh - 0.45, clampf((charge - 0.25) / 0.55, 0.0, 1.0)))
 	match kind:
 		"ground":
 			y_aim = Ball.RADIUS
 		"header":
-			y_aim = 0.45
+			y_aim = 0.5
 		"chip":
-			y_aim = clampf(y_aim, 1.2, m.gh - 0.3)
-	var over := maxf(charge - 0.85, 0.0) / 0.15
-	if kind != "ground" and not opts.has("special"):
-		y_aim += over * 1.3
+			y_aim = m.gh - 0.55
 	return Vector3(goal.x, y_aim, z_aim)
 
 
-func preview_shot_point(kind: String, charge: float) -> Vector3:
-	return _shot_aim(kind, charge, aim_dir, aim_active, {})
+## La "ruleta": en el instante del disparo se calcula la probabilidad de que
+## vaya al arco y de que sea gol (tiro, curva, potencia, distancia, ángulo,
+## presión, portero...) y se resuelve con una tirada. La física después
+## solo representa ese resultado.
+func resolve_shot(kind: String, charge: float, intent: Vector3, speed: float, sid: String) -> Dictionary:
+	var from := m.ball.position
+	var half := m.gw * 0.5
+	var dist := Match.flat_dist(from, intent)
+	var over := maxf(charge - 0.85, 0.0) / 0.15
+	var aimed_out := absf(intent.z) > half - 0.25
+	var a := Vector3(intent.x, 0, -half) - from
+	var b := Vector3(intent.x, 0, half) - from
+	a.y = 0.0
+	b.y = 0.0
+	var angle_score := clampf(a.angle_to(b) / 0.5, 0.0, 1.0)
+	# Probabilidad de ir al arco
+	var p_t := 0.5 + st("shot_acc") * 0.45 - maxf(dist - 11.0, 0.0) * 0.014 - pressure() * 0.18 \
+		- over * 0.45 - (1.0 - angle_score) * 0.12
+	match kind:
+		"ground":
+			p_t += 0.05
+		"curve":
+			p_t += -0.15 + st("curve") * 0.3
+		"chip":
+			p_t -= 0.1
+		"volley":
+			p_t -= 0.15
+		"header":
+			p_t += -0.08 + (st("jump") - 0.5) * 0.2
+	if absf(intent.z) > half * 0.6:
+		p_t -= 0.05
+	if stamina < 20.0:
+		p_t -= 0.08
+	if sid != "":
+		p_t += 0.3
+	p_t = clampf(p_t, 0.05, 0.97)
+	if aimed_out:
+		p_t = 0.0
+	# Probabilidad de que el portero no llegue (si va al arco)
+	var gk := team.opponent.gk()
+	var p_g := 0.9
+	if gk != null:
+		var t_arrive := dist / maxf(speed, 8.0)
+		var reach := clampf(0.8 + 6.0 * t_arrive, 0.8, 3.2)
+		var lateral := absf(intent.z - gk.position.z)
+		var rf := clampf((lateral - 0.3) / reach, 0.0, 1.0)
+		var placement := absf(intent.z) / half
+		p_g = 0.05 + (speed - 18.0) * 0.02 + placement * 0.25 + rf * 0.3 - gk.st("reflex") * 0.35 - m.gk_bonus(gk.team)
+		if kind == "curve":
+			p_g += st("curve") * 0.12
+		if intent.y < 0.6 or intent.y > m.gh - 0.8:
+			p_g += 0.06
+		if sid != "":
+			p_g += float(SkillDB.special(sid).get("break", 0.3))
+		p_g = clampf(p_g, 0.03, 0.95)
+	var on_target := randf() < p_t
+	var goal := on_target and randf() < p_g
+	return {"p_target": p_t, "p_goal": p_t * p_g, "on_target": on_target, "goal": goal}
+
+
+## Ajusta el punto final según el resultado de la ruleta, lo más cerca
+## posible de donde apuntaste.
+func _shot_final_target(intent: Vector3, res: Dictionary, kind: String, charge: float) -> Vector3:
+	var half := m.gw * 0.5
+	var t := intent
+	var gk := team.opponent.gk()
+	if res["goal"]:
+		t.z = clampf(t.z, -(half - 0.35), half - 0.35)
+		t.y = clampf(t.y, Ball.RADIUS, m.gh - 0.35)
+		if gk != null and absf(t.z - gk.position.z) < 1.2:
+			# Lejos de las manos del portero, sin salir del arco
+			var away := signf(t.z - gk.position.z) if absf(t.z - gk.position.z) > 0.05 else (1.0 if randf() < 0.5 else -1.0)
+			t.z = clampf(t.z + away * 0.9, -(half - 0.35), half - 0.35)
+	elif res["on_target"]:
+		t.z = clampf(t.z, -(half - 0.35), half - 0.35)
+		t.y = clampf(t.y, Ball.RADIUS, m.gh - 0.35)
+		if gk != null:
+			# Al alcance del portero (ataja o despeja)
+			var dz := t.z - gk.position.z
+			if absf(dz) > 1.6:
+				t.z = gk.position.z + signf(dz) * 1.6
+			t.y = minf(t.y, 2.0)
+	else:
+		var over := maxf(charge - 0.85, 0.0) / 0.15
+		var side := signf(t.z) if absf(t.z) > 0.2 else (1.0 if randf() < 0.5 else -1.0)
+		if absf(t.z) > half + 0.5:
+			pass  # Apuntó afuera: va donde apuntó
+		elif randf() < 0.15:
+			# Al palo (por la cara externa: rebota afuera)
+			t.z = side * (half + Ball.POST_RADIUS + Ball.RADIUS * 0.6)
+		elif over > 0.2 or kind == "chip" or (kind != "curve" and kind != "ground" and randf() < 0.45):
+			t.y = m.gh + randf_range(0.5, 1.6)
+		else:
+			t.z = side * (half + randf_range(0.5, 1.8))
+	return t
 
 
 func _kick_shot(kind: String, charge: float, opts: Dictionary) -> void:
@@ -803,70 +899,59 @@ func _kick_shot(kind: String, charge: float, opts: Dictionary) -> void:
 	var sid: String = opts.get("special", "")
 	var active: bool = opts.get("aim_active", aim_active)
 	var aim: Vector3 = opts.get("aim", aim_dir)
-	var target := _shot_aim(kind, charge, aim, active, opts)
+	var intent := shot_intent(kind, charge, aim, active, opts)
 	var power_mul := 0.85 + 0.3 * st("shot_power")
 	if is_awakened_as("tiro"):
 		power_mul *= 1.2
 	var speed := lerpf(15.0, 31.0, charge) * power_mul
 	var top := 0.12
 	var side := 0.0
-	var comp := 1.0
-	var dist := Match.flat_dist(from, target)
-	var over := maxf(charge - 0.85, 0.0) / 0.15
-	var err := (1.0 - st("shot_acc")) * 0.6 + pressure() * 0.4 + over * 0.5 + dist / 60.0
 	match kind:
 		"ground":
 			speed *= 0.92
 			top = 0.0
 		"volley":
 			speed *= 1.05
-			err *= 1.25
 		"header":
 			speed = (11.0 + 9.0 * charge) * (1.35 if is_awakened_as("salto") else 1.0)
-			err *= 1.1
 			top = 0.0
 			gain_energy(SkillDB.GAIN["header"])
 		"curve":
-			# Tiro curvo (R1): mucho efecto. La compensación no es perfecta,
-			# así que puede abrirse y salir desviado.
 			speed = lerpf(14.0, 27.0, charge) * power_mul
-			err *= 1.3
-			comp = randf_range(0.8, 1.45)
 	var sd := {}
 	if sid != "":
 		sd = SkillDB.special(sid)
-		err *= 0.2
-		comp = 1.0
 		match sid:
 			"disparo_directo":
 				speed = 36.0 * (1.1 if is_awakened_as("tiro") else 1.0)
 				top = 0.5
-				target.y = clampf(target.y, 0.5, m.gh - 0.6)
+				intent.y = clampf(intent.y, 0.5, m.gh - 0.6)
 			"curva_del_ego":
 				speed = 30.0
 				top = 0.3
-				target.y = clampf(target.y, 0.6, m.gh - 0.5)
+				intent.y = clampf(intent.y, 0.6, m.gh - 0.5)
 			"tiro_fantasma":
 				speed = 31.0
 				top = 0.0
-				target.y = clampf(target.y, 0.6, m.gh - 0.6)
+				intent.y = clampf(intent.y, 0.6, m.gh - 0.6)
 			"meteoro_descendente":
 				speed = 33.0
 				top = 1.3
-				target.y = m.gh - 0.4
-				if absf(target.z) <= half:
-					target.z = (signf(target.z) if absf(target.z) > 0.01 else 1.0) * (half - 0.45)
-	target.z += randf_range(-1.0, 1.0) * err * 1.0
-	target.y += randf_range(-0.35, 0.8) * err * 0.7 + over * randf() * 1.2
+				intent.y = m.gh - 0.4
+				if absf(intent.z) <= half:
+					intent.z = (signf(intent.z) if absf(intent.z) > 0.01 else 1.0) * (half - 0.45)
+	var res := resolve_shot(kind, charge, intent, speed, sid)
+	var target := _shot_final_target(intent, res, kind, charge)
 	target.y = maxf(target.y, Ball.RADIUS)
+	var dist := Match.flat_dist(from, target)
 	var dir := Vector3(target.x - from.x, 0.0, target.z - from.z).normalized()
 	var lat := Vector3.UP.cross(dir)
 	var inward := signf(lat.dot(Vector3(0, 0, -target.z))) if absf(target.z) > 0.15 else signf(facing.cross(dir).y + 0.001)
 	if (kind == "shot" or kind == "volley") and sid == "":
 		var crossv := facing.cross(dir).y
-		side = clampf(crossv * 1.5, -1.0, 1.0) * (0.25 + (1.0 - charge) * 0.4)
+		side = clampf(crossv * 1.5, -1.0, 1.0) * (0.25 + (1.0 - charge) * 0.4) * (0.5 + st("curve") * 0.6)
 	elif kind == "curve":
-		side = 0.95 * inward
+		side = (0.6 + st("curve") * 0.5) * inward
 	match sid:
 		"curva_del_ego":
 			side = 1.35 * inward
@@ -881,16 +966,17 @@ func _kick_shot(kind: String, charge: float, opts: Dictionary) -> void:
 	elif kind == "ground":
 		vel = dir * speed
 	else:
-		vel = Kick.aimed(from, target, speed, top, side * comp)
+		vel = Kick.aimed(from, target, speed, top, side)
 	b.kick(self, vel, "shot", side, top)
+	b.shot_result = "goal" if res["goal"] else ("save" if res["on_target"] else "miss")
+	b.shot_prob = res["p_goal"]
+	m.on_shot_resolved(self, res)
 	if sid != "":
 		b.special_id = sid
 		b.special_break = float(sd.get("break", 0.3))
 		b.set_trail(true, sd["color"])
-		if sid == "disparo_directo":
-			b.knuckle = 0.25
-		elif sid == "tiro_fantasma":
-			b.knuckle = 0.7
+		if sid == "tiro_fantasma" and not res["goal"]:
+			b.knuckle = 0.4
 		FX.shake(0.6)
 		FX.burst(from, sd["color"], 40, 9.0)
 		FX.ring(from, sd["color"], 4.0)

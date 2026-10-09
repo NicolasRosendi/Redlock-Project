@@ -18,7 +18,7 @@ const STEPS := [
 	"pass", "gyro_pass_nearest", "gyro_pass_curve", "through_space", "shot", "shot_on_target", "shot_wide",
 	"overpower", "curve_shot", "ground_shot", "feint", "chip", "dribble_cut", "dribble_elastic", "sombrero",
 	"special_shot", "special_pass", "special_dribble", "awaken", "special_curve", "tackle", "slide", "poke", "arm",
-	"special_tackle", "team_switch", "close_control", "post_bounce", "goal_energy", "telegraph", "stamina",
+	"special_tackle", "team_switch", "close_control", "post_bounce", "goal_energy", "telegraph", "throw_in_distance", "corner", "stamina",
 ]
 
 
@@ -247,26 +247,33 @@ func _physics_process(_dt: float) -> void:
 				_check("al hueco sin compañero: el balón va hacia el stick", b.kick_kind == "pass" and v.dot(Vector3(0, 0, 1)) > 0.85, "dir=%s" % v)
 				done = true
 		"shot_on_target":
-			if t == 2: _press("move_right"); _press("btn_square")
-			if t == 30: _release("btn_square")
-			if t == 50:
-				var cz := _goal_crossing()
-				_check("tiro apuntando al arco va al arco", absf(cz.z) < m.gw * 0.5 + 0.2 and cz.y < m.gh + 0.3, "cruce=(%.1f, %.1f)" % [cz.z, cz.y])
+			if t == 2:
+				# Stick un poco desviado del centro hacia arriba = esquina de arriba (-z)
+				var to_c := h.flat_to(Vector3(m.hl, 0, 0)).normalized()
+				var aim := to_c.rotated(Vector3.UP, deg_to_rad(12.0))
+				var it := h.shot_intent("shot", 0.6, aim, true, {})
+				var aim2 := to_c.rotated(Vector3.UP, deg_to_rad(-2.0))
+				var it2 := h.shot_intent("shot", 0.6, aim2, true, {})
+				var corner := m.gw * 0.5 - 0.45
+				_check("apuntar 'más o menos' a la esquina = esquina; al centro = centro", absf(it.z + corner) < 0.01 and absf(it2.z) < m.gw * 0.25,
+					"esquina z=%.2f · centro z=%.2f" % [it.z, it2.z])
 				done = true
 		"shot_wide":
 			if t == 2: _press("move_up"); _press("btn_square")
 			if t == 30: _release("btn_square")
 			if t == 50:
 				var cz2 := _goal_crossing()
-				_check("tiro apuntando lejos del arco sale desviado", absf(cz2.z) > m.gw * 0.5, "cruce z=%.1f" % cz2.z)
+				_check("apuntar lejos del arco: la ruleta da 0% y sale afuera", absf(cz2.z) > m.gw * 0.5 and b.shot_result == "miss", "cruce z=%.1f resultado=%s" % [cz2.z, b.shot_result])
 				done = true
 		"overpower":
-			if t == 2: _press("move_right"); _press("btn_square")
-			if t == 70:
-				var pp := h.preview_shot_point("shot", h.charge_amount())
-				_check("pasarse de potencia apunta por encima del travesaño", pp.y > m.gh, "y=%.2f carga=%.2f" % [pp.y, h.charge_amount()])
-				_release("btn_square")
-			if t == 90:
+			if t == 2:
+				var it3 := h.shot_intent("shot", 0.6, Vector3.RIGHT, true, {})
+				var ok_p := 0.0
+				var over_p := 0.0
+				for i in 50:
+					ok_p += float(h.resolve_shot("shot", 0.6, it3, 26.0, "")["p_target"])
+					over_p += float(h.resolve_shot("shot", 1.0, it3, 30.0, "")["p_target"])
+				_check("pasarse de potencia baja mucho la probabilidad de ir al arco", over_p < ok_p * 0.7, "%.0f%% → %.0f%%" % [ok_p * 2.0, over_p * 2.0])
 				done = true
 		"curve_shot":
 			if t == 2: _press("sprint"); _press("move_right")
@@ -378,6 +385,33 @@ func _physics_process(_dt: float) -> void:
 			if t == 22:
 				var d4 := m.teams[1].players[2]
 				_check("la IA avisa el quite con '!' y luego entra", log_lines[-1] == "true" and d4.state == Player.State.TACKLE, "aviso=%s estado=%d" % [log_lines[-1], d4.state])
+				done = true
+		"throw_in_distance":
+			if t == 1:
+				for p in m.players:
+					p.frozen = false
+				m._set_phase(Match.Phase.PLAY)
+				m._start_restart("throw_in", m.teams[1], Vector3(h.position.x, 0, m.hw - 0.05))
+				h.position = Vector3(h.position.x + 1.0, 0, m.hw - 1.5)
+				max_dist = 99.0
+			if t >= 2 and t <= 45:
+				_press("move_up")  # intenta meterse encima del balón
+				for p in m.teams[0].players:
+					max_dist = minf(max_dist, Match.flat_dist(p.position, b.position))
+			if t == 46:
+				_check("saque de banda: los rivales quedan a distancia", max_dist >= 3.9, "más cerca: %.2fm" % max_dist)
+				done = true
+		"corner":
+			if t == 1:
+				for p in m.players:
+					p.frozen = false
+				m._set_phase(Match.Phase.PLAY)
+				var defender := m.teams[1].players[2]
+				b.place(Vector3(m.hl - 2.0, 0.5, 6.0))
+				b.kick(defender, Vector3(9.0, 2.0, 0.0), "clear")
+			if t == 40:
+				var kind: String = m._restart.get("kind", "")
+				_check("balón que sale por el fondo tocado por un defensor = córner", kind == "corner" and m.stats["corners"] >= 1, "saque=%s" % kind)
 				done = true
 		"tackle":
 			if t == 1:

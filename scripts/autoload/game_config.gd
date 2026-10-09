@@ -18,13 +18,20 @@ var camera_mode := 0
 
 ## Perfil del jugador creado. Es la semilla de la futura personalización
 ## estilo Xenoverse 2 (apariencia, atributos, técnicas equipadas).
+## Nombres de los atributos para la ficha del jugador.
+const STAT_NAMES := {
+	"shot_acc": "Tiro", "shot_power": "Potencia", "curve": "Curva", "passing": "Pase",
+	"dribble": "Regate", "speed": "Velocidad", "accel": "Aceleración", "strength": "Fuerza",
+	"tackle": "Quite", "intercept": "Anticipación", "jump": "Salto", "reflex": "Reflejos",
+}
+
 var profile := {
 	"name": "TÚ",
 	"number": 11,
 	"skin": Color(0.93, 0.76, 0.6),
 	"hair": Color(0.08, 0.08, 0.1),
 	"stats": {
-		"speed": 0.72, "accel": 0.72, "shot_power": 0.75, "shot_acc": 0.72,
+		"speed": 0.72, "accel": 0.72, "shot_power": 0.75, "shot_acc": 0.72, "curve": 0.7,
 		"passing": 0.66, "dribble": 0.72, "tackle": 0.5, "strength": 0.6,
 		"jump": 0.6, "intercept": 0.55, "reflex": 0.3,
 	},

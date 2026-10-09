@@ -78,6 +78,32 @@ func _ready() -> void:
 	_desc.add_theme_font_size_override("normal_font_size", 20)
 	_desc.add_theme_font_size_override("bold_font_size", 30)
 	panel.add_child(_desc)
+	# Ficha del jugador: atributos (base del futuro modo carrera)
+	var ficha := PanelContainer.new()
+	ficha.add_theme_stylebox_override("panel", sb.duplicate())
+	ficha.position = Vector2(860, 590)
+	ficha.custom_minimum_size = Vector2(640, 0)
+	add_child(ficha)
+	var grid := GridContainer.new()
+	grid.columns = 4
+	grid.add_theme_constant_override("h_separation", 14)
+	grid.add_theme_constant_override("v_separation", 6)
+	ficha.add_child(grid)
+	var st: Dictionary = GameConfig.profile["stats"]
+	for key in GameConfig.STAT_NAMES:
+		if key == "reflex":
+			continue
+		var l := Label.new()
+		l.text = GameConfig.STAT_NAMES[key]
+		l.custom_minimum_size = Vector2(110, 0)
+		l.add_theme_font_size_override("font_size", 16)
+		grid.add_child(l)
+		var bar := ProgressBar.new()
+		bar.min_value = 0
+		bar.max_value = 100
+		bar.value = float(st.get(key, 0.5)) * 100.0
+		bar.custom_minimum_size = Vector2(170, 18)
+		grid.add_child(bar)
 	var hint := Label.new()
 	hint.text = "Izq/Der: cambiar técnica · Círculo/Esc: volver"
 	hint.position = Vector2(90, 850)
