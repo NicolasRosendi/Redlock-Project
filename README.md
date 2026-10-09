@@ -8,6 +8,10 @@ Motor: **Godot 4.3+** (GDScript). Gráficos sencillos generados por código: no 
 
 ![Técnica especial](docs/img/tecnica.jpg)
 
+| Quite (el rival cae y aparece el aviso) | Barrida | Estirada del portero |
+|---|---|---|
+| ![Quite](docs/img/quite.jpg) | ![Barrida](docs/img/barrida.jpg) | ![Estirada](docs/img/estirada.jpg) |
+
 ## Cómo jugar
 
 1. Instala [Godot 4.3 o superior](https://godotengine.org/download) (versión estándar, no hace falta la de .NET).
@@ -26,33 +30,43 @@ En el menú eliges modo de control, formato (3v3, 5v5, 7v7 u 11v11), tipo de **D
 
 Pensados para mando de PlayStation (en Xbox: Cruz=A, Círculo=B, Cuadrado=X, Triángulo=Y). Entre corchetes, el teclado.
 
+**El stick izquierdo funciona como un giroscopio:** pases y tiros salen hacia donde apunta. Si el compañero no está justo
+en esa dirección, el pase sale hacia el stick y se cierra con efecto hasta él. Con el stick suelto, el juego asiste.
+
 | Botón | Ataque (con balón) | Defensa (sin balón) |
 |---|---|---|
-| Stick izq. [WASD] | Moverse | Moverse |
-| **R1** [Shift] | Correr (gasta estamina; el balón se te separa más) | Correr |
+| Stick izq. [WASD] | Moverse y apuntar | Moverse |
+| **R1** [Shift] | Correr (los toques son más largos: más fácil que te roben) | Correr |
 | **L2** [Q] | Proteger el balón | Marcar / contener (con stick quieto se coloca solo entre el rival y tu arco) |
-| **L1** [E] | Modificador "picar": L1+Cuadrado vaselina, L1+Cruz pase bombeado, L1+Triángulo al hueco por arriba | Presionar (va solo hacia el portador) |
-| **Cruz** [K] | Pase raso (mantener = más fuerte) | Cargar con el cuerpo |
-| **Círculo** [L] | Centro | Quite |
-| **Triángulo** [I] | Pase al hueco | — |
-| **Cuadrado** [J] | Tiro (mantener = potencia; pasarse de potencia = se va alto) | Barrida |
+| **L1** [E] | Modificador "picar": L1+Cuadrado vaselina, L1+Cruz pase bombeado, L1+Triángulo al hueco por arriba | Presionar (mantener). **Modo Equipo: toque corto = cambiar de jugador** |
+| **Cruz** [K] | Pase al compañero **más cercano** en la dirección del stick (mantener = más fuerte) | Cargar con el cuerpo |
+| **Triángulo** [I] | Pase **al hueco**: al espacio delante del compañero, hacia donde apunta el stick | — |
+| **Círculo** [L] | Centro | Quite · **R1 + Círculo: barrida** |
+| **Cuadrado** [J] | Tiro (mantener = potencia) · **R1 + Cuadrado: tiro curvo** | **Meter el pie** · mantener al lado del rival: **agarrar con el brazo** |
 | Cuadrado ×2 | **Tiro raso** | — |
-| Tiro + Cruz rápido | **Amague** (cancela el tiro; esquivas el siguiente quite) | — |
-| **Stick der.** [flechas] | Regates: adelante *toque largo*, lado *recorte*, atrás *arrastre* | — |
-| **L2 + stick der.** | Regates mejorados: *sombrero*, *elástica*, *ruleta* | — |
-| Balón suelto cerca | Cuadrado/Cruz = remate o pase **de primera** (salta solo a cabecear si viene alto) | |
+| Tiro + Cruz rápido | **Amague** (cancela el tiro) | — |
+| **Stick der.** [flechas] | Regates: adelante *toque largo*, lado *recorte*, atrás *arrastre*; con L2: *sombrero*, *elástica*, *ruleta* | — |
+| Balón suelto cerca | Cuadrado/Cruz = remate o pase **de primera** (cabezazo/volea automáticos) | |
 
-**Paleta de técnicas (mantener R2), estilo Xenoverse 2** — cuestan barras de energía:
+**Tiros:** la mira (aro sobre el arco) muestra a dónde va el tiro mientras cargas; se pone **roja si va afuera**.
+Apuntar lejos del arco, **pasarse de potencia** (se va por arriba) o el **tiro curvo** (mucho efecto, a veces se abre) pueden fallar.
 
-| | R2 | R2 + L2 |
-|---|---|---|
-| **Cruz** | Pase Meteoro (1) — imposible de interceptar | *(ranura libre)* |
-| **Círculo** | Quite Relámpago (1) — embestida que roba o intercepta a distancia | **DESPERTAR** (3) |
-| **Triángulo** | Regate Fantasma (1) — intocable 1,3 s, tumba rivales | *(ranura libre)* |
-| **Cuadrado** | Disparo Directo (2) | Meteoro Descendente (3) |
+**Paleta de técnicas (mantener R2, o R2 + L2), estilo Xenoverse 2.** Las 8 ranuras se eligen antes del partido en
+**Kit de habilidades** (menú principal): puedes llevar, por ejemplo, dos tiros (uno curvo y uno directo) o dos regates.
+
+| Tipo | Técnicas (barras de energía) |
+|---|---|
+| Tiro | Disparo Directo (2) · Curva del Ego (2) · Tiro Fantasma (2) · Meteoro Descendente (3) |
+| Regate | Regate Fantasma (1) · Regate Relámpago (1) · Sombrero Celestial (2) · Torbellino (1) |
+| Pase | Pase Meteoro (1) · Pase Bumerán (1) · Centro Teledirigido (1) |
+| Defensa | Quite Relámpago (1) · Muro de Acero (1) |
+| Transformación | Despertar (3) |
+
+Kit por defecto: R2 + Cruz/Círculo/Triángulo/Cuadrado = Pase Meteoro, Quite Relámpago, Regate Fantasma, Disparo Directo;
+R2 + L2 + Cruz/Círculo/Triángulo/Cuadrado = Centro Teledirigido, Despertar, Regate Relámpago, Curva del Ego.
 
 Otros: cruceta ←/→ [1/2] cambia el tipo de Despertar, cruceta ↑ [3] energía al máximo (*debug*), cruceta ↓ [H] ayuda,
-Select [C] cámara (TV / detrás del jugador), Start [Esc] pausa.
+Select [C] cámara (TV / detrás del jugador), Start [Esc] pausa, R3 [R] cambiar de jugador (modo Equipo).
 
 ## Sistemas implementados
 
@@ -63,7 +77,14 @@ Select [C] cámara (TV / detrás del jugador), Start [Esc] pausa.
   *Alas de Cóndor* (salto, cabezazos y voleas), *Velocidad Divina*, *Metavisión Predictiva* (marca dónde caerá el balón y una ruta;
   seguirla te acelera) y *Visión Espacial* (radar con el balón y las intenciones de los rivales; tus pases son más difíciles de cortar).
 - **Física de balón propia**: rebote, rozamiento, resistencia del aire, curva por efecto (Magnus), caída por *topspin* y *knuckle*.
-  El efecto es **automático**: apuntas con el stick y el juego calcula la curva para que el balón llegue donde apuntaste.
+  Gravedad algo aumentada para que el balón no "flote" en la cámara de TV.
+- **Conducción por toques**: el jugador empuja el balón, que rueda delante hasta el siguiente toque (al esprintar se aleja más).
+  Las recepciones amortiguan el pase en lugar de pegar el balón al pie.
+- **Pases y tiros "giroscopio"**: salen hacia el stick; un solver calcula el efecto para que la curva termine en el compañero.
+- **Lectura clara de las jugadas**: avisos grandes sobre la jugada (¡QUITE!, ¡ATAJADA!, ¡CORTADO!, ¡FALTA!...), congelado breve
+  en los impactos, jugadores que caen al perder un duelo, guantes del portero y polvo en las barridas.
+- **Animación procedural** con articulaciones (muslo/rodilla, brazo/codo): carrera, toques, armado y remate, quite,
+  barrida, caída, estirada del portero, postura de marca y celebración.
 - **Porteros** que predicen la trayectoria, se lanzan, atrapan o despejan (los rechazos quedan vivos para remates).
 - **IA** por roles: presión, cobertura, marcajes, desmarques y carreras al espacio, pases según líneas de pase libres,
   tiros según ángulo/distancia y uso ocasional de técnicas.
@@ -92,7 +113,8 @@ Para ajustar el "feel": velocidades y estamina en `player.gd` (`max_speed`, `_up
 GODOT=/ruta/a/godot tests/run_tests.sh
 ```
 
-Incluye: precisión de pases/centros/tiros con efecto, porcentaje de atajadas del portero, una batería que simula el mando
-(pase, tiro, tiro raso, amague, vaselina, regates, las 5 técnicas, despertar, quites, estamina) y partidos IA vs IA en los 4 formatos.
+Incluye: precisión de pases/centros/tiros y de los pases curvos, porcentaje de atajadas del portero, una batería que simula
+el mando (pase al más cercano, pase curvo, al hueco, tiro al arco y desviado, potencia excesiva, tiro curvo, tiro raso, amague,
+vaselina, regates, técnicas, despertar, quite, barrida, meter el pie, agarrar, cambio con L1, estamina) y partidos IA vs IA.
 
 Más detalles de diseño y próximos pasos en [`docs/DISENO_GAMEPLAY.md`](docs/DISENO_GAMEPLAY.md).

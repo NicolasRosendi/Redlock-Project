@@ -35,6 +35,8 @@ func update(dt: float) -> void:
 	p.want_mark = false
 	p.want_shield = false
 	p.want_press = false
+	p.want_arm = false
+	p.aim_active = false
 	p.has_look = false
 	p.making_run = false
 	p.path_boost = false
@@ -163,9 +165,12 @@ func _press() -> void:
 	decide_t = m.ai_reaction(p.team) * randf_range(0.8, 1.4)
 	if d < 1.45:
 		var r := randf()
-		if r < m.ai_tackle_rate(p.team):
+		var rate := m.ai_tackle_rate(p.team)
+		if r < rate * 0.65:
 			p.do_tackle()
-		elif r < m.ai_tackle_rate(p.team) + 0.1:
+		elif r < rate:
+			p.do_poke()
+		elif r < rate + 0.1:
 			p.do_shoulder()
 	elif d < 3.0 and d > 1.6 and c.speed_h() > 5.0 and randf() < 0.07:
 		p.do_slide()
@@ -344,6 +349,7 @@ func _do_pass(target: Player, through: bool, lob: bool) -> void:
 	elif lob:
 		kind = "pass_lob"
 	var charge := clampf(d / 40.0, 0.2, 0.85)
+	p.aim_dir = p.flat_to(target.position).normalized()
 	if p.energy >= SkillDB.BAR * 2.0 and not lob and d > 15.0 and randf() < 0.05 * (1 + m.ai_level(p.team)):
 		if p.try_special("pase_meteoro"):
 			return
@@ -368,8 +374,8 @@ func _do_shot(sq: float) -> void:
 		if p.try_special("meteoro_descendente"):
 			return
 	if bars >= 2.0 and sq > 0.4 and randf() < 0.3 + 0.1 * m.ai_level(t):
-		p.aim_dir = Vector3(0, 0, signf(z))
-		if p.try_special("disparo_directo"):
+		var options := ["disparo_directo", "curva_del_ego", "tiro_fantasma"]
+		if p.try_special(options[randi() % options.size()]):
 			return
 	var kind := "shot"
 	if gk != null and Match.flat_dist(gk.position, t.opp_goal()) > 4.0 and d > 14.0 and randf() < 0.35:

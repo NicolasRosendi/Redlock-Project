@@ -66,6 +66,8 @@ var stats := {
 }
 
 var _pass_marker: MeshInstance3D
+var _space_marker: MeshInstance3D
+var _aim_reticle: MeshInstance3D
 var _pred_markers: Array[MeshInstance3D] = []
 var _land_marker: MeshInstance3D
 var _crowd_mat: ShaderMaterial
@@ -255,7 +257,11 @@ func _physics_process(dt: float) -> void:
 
 	if ball.carrier != null:
 		ball.carry(dt)
-	else:
+		if absf(ball.position.x) > hl or absf(ball.position.z) > hw:
+			var c := ball.carrier
+			if not c.restart_lock:
+				ball.kick(c, ball.carry_vel, "carry")
+	if ball.carrier == null:
 		ball.step(dt)
 		var was_in := ball.in_goal
 		ball.collide_goal(1.0, hl, gw, gh, gdepth)
@@ -313,14 +319,17 @@ func _resolve_touches() -> void:
 	for p in players:
 		if not p.can_touch() or b.tried.has(p):
 			continue
-		if b.shield_team >= 0 and p.team_id != b.shield_team and p.state != Player.State.DASH:
+		if b.shield_team >= 0 and p.team_id != b.shield_team and p.state != Player.State.DASH and time >= p.wall_until:
 			continue
 		var dh := flat_dist(b.position, p.position)
 		var bh := b.position.y - p.height
 		var hands := p.role == Player.Role.GK and in_box(p.team, b.position) and in_box(p.team, p.position)
-		var reach := 0.6 + 0.25 * p.st("intercept")
+		var reach := 0.55 + 0.2 * p.st("intercept")
 		if p.want_mark:
-			reach += 0.45
+			reach += 0.4
+		var wall := time < p.wall_until
+		if wall:
+			reach = 2.3
 		var type := "foot"
 		if hands:
 			reach = 1.0 if p.state != Player.State.DIVE else 1.6
@@ -328,9 +337,9 @@ func _resolve_touches() -> void:
 				continue
 			type = "hands"
 		elif bh > 1.15:
-			if bh > 2.05:
+			if bh > (2.6 if wall else 2.05):
 				continue
-			reach = 0.75
+			reach = 2.3 if wall else 0.75
 			type = "head"
 		if dh > reach:
 			continue
@@ -365,8 +374,11 @@ func _attempt_touch(p: Player, type: String) -> void:
 			_interception(p)
 		return
 	var chance: float
-	if b.special_id == "pase_meteoro" and same_team:
+	var wall := time < p.wall_until and not same_team
+	if b.special_id != "" and b.shield_team == p.team_id and same_team:
 		chance = 1.0
+	elif wall:
+		chance = 1.0 if b.shield_team < 0 else 0.5
 	elif intended or (same_team and is_pass):
 		chance = clampf(1.05 - maxf(speed - 18.0, 0.0) * 0.04, 0.5, 1.0)
 	elif is_pass and not same_team:
@@ -394,8 +406,11 @@ func _attempt_touch(p: Player, type: String) -> void:
 		b.kick(p, v, "deflect")
 		p.gain_energy(SkillDB.GAIN["block"])
 		notify("¡Bloqueo de %s!" % p.player_name, p.team.color.lightened(0.3))
+		FX.popup(p.position, "¡BLOQUEO!", p.team.color.lightened(0.5))
+		FX.burst(b.position, Color(1, 1, 1), 16, 5.0, 0.4)
+		FX.hitstop(0.06)
 		return
-	b.set_carrier(p)
+	b.set_carrier(p, true)
 	if same_team and is_pass and prev != p:
 		_pass_completed(prev, p)
 	elif not same_team and is_pass:
@@ -415,6 +430,8 @@ func _interception(p: Player) -> void:
 	stats["interceptions"] += 1
 	p.gain_energy(SkillDB.GAIN["interception"])
 	notify("¡Interceptación de %s!" % p.player_name, p.team.color.lightened(0.3))
+	FX.popup(p.position, "¡CORTADO!", p.team.color.lightened(0.5))
+	FX.ring(p.position, p.team.color.lightened(0.3), 2.2, 0.35)
 
 
 func _gk_touch(gk: Player) -> void:
@@ -439,14 +456,20 @@ func _gk_touch(gk: Player) -> void:
 			b.set_carrier(gk)
 			if shotlike:
 				notify("Atrapa %s" % gk.player_name, gk.team.color.lightened(0.3))
+				FX.popup(gk.position, "¡ATRAPADA!", Color(1, 1, 1))
+				FX.ring(b.position, Color(1, 1, 1), 1.6, 0.3)
+				FX.hitstop(0.06)
 		else:
 			var away := gk.team.attack_sign
 			var pz := signf(b.position.z) if absf(b.position.z) > 0.2 else (1.0 if randf() < 0.5 else -1.0)
 			var v := Vector3(away * randf_range(4.0, 9.0), randf_range(2.0, 6.0), pz * randf_range(3.0, 9.0))
 			b.kick(gk, v, "parry")
 			notify("¡Atajada de %s!" % gk.player_name, gk.team.color.lightened(0.3))
-			FX.burst(b.position, Color(1, 1, 1), 24, 6.0)
-			FX.shake(0.4)
+			FX.popup(gk.position, "¡ATAJADA!", Color(1, 1, 1), 1.2)
+			FX.burst(b.position, Color(1, 1, 1), 34, 8.0)
+			FX.ring(b.position, gk.team.gk_color, 2.5, 0.35)
+			FX.shake(0.5)
+			FX.hitstop(0.09)
 
 
 # ---------------------------------------------------------------- eventos
@@ -504,6 +527,7 @@ func on_woodwork() -> void:
 	_woodwork_cd = 0.5
 	stats["woodwork"] += 1
 	notify("¡Al palo!", Color(1, 1, 1))
+	FX.popup(ball.position - Vector3.UP * 1.5, "¡PALO!", Color(1, 1, 1))
 	FX.shake(0.5)
 
 
@@ -511,8 +535,10 @@ func foul(by: Player, victim: Player) -> void:
 	if phase != Phase.PLAY:
 		return
 	stats["fouls"] += 1
-	victim.stun(0.6)
+	victim.stun(0.6, true)
 	notify("¡Falta de %s!" % by.player_name, Color(1.0, 0.85, 0.3))
+	FX.popup(victim.position, "¡FALTA!", Color(1.0, 0.85, 0.2), 1.2)
+	FX.hitstop(0.08)
 	var spot := victim.position
 	spot.y = 0.0
 	if in_box(by.team, spot):
@@ -967,16 +993,19 @@ func _build_stands() -> void:
 
 
 func _build_markers() -> void:
-	_pass_marker = _marker(Color(1.0, 1.0, 1.0, 0.75), 0.7)
+	_pass_marker = _marker(Color(1.0, 1.0, 1.0, 0.8), 0.7)
+	_space_marker = _marker(Color(1.0, 0.9, 0.3, 0.85), 0.55)
 	_land_marker = _marker(Color(0.8, 0.4, 1.0, 0.9), 0.55)
-	for i in 14:
+	# Mira del tiro: aro vertical sobre la línea de gol
+	_aim_reticle = _make_reticle()
+	for i2 in 14:
 		var mi := MeshInstance3D.new()
-		var s := SphereMesh.new()
-		s.radius = 0.09
-		s.height = 0.18
-		s.radial_segments = 6
-		s.rings = 3
-		mi.mesh = s
+		var s2 := SphereMesh.new()
+		s2.radius = 0.09
+		s2.height = 0.18
+		s2.radial_segments = 6
+		s2.rings = 3
+		mi.mesh = s2
 		var mat := StandardMaterial3D.new()
 		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 		mat.albedo_color = Color(0.85, 0.5, 1.0)
@@ -985,6 +1014,35 @@ func _build_markers() -> void:
 		mi.visible = false
 		add_child(mi)
 		_pred_markers.append(mi)
+
+
+## Aro que siempre mira a la cámara: se ve igual desde la cámara de TV.
+func _make_reticle() -> MeshInstance3D:
+	var g := Gradient.new()
+	g.offsets = PackedFloat32Array([0.0, 0.28, 0.4, 0.62, 0.92, 1.0])
+	g.colors = PackedColorArray([Color(1, 1, 1, 0.9), Color(1, 1, 1, 0.0), Color(1, 1, 1, 0.0), Color(1, 1, 1, 1.0), Color(1, 1, 1, 1.0), Color(1, 1, 1, 0.0)])
+	var tex := GradientTexture2D.new()
+	tex.gradient = g
+	tex.fill = GradientTexture2D.FILL_RADIAL
+	tex.fill_from = Vector2(0.5, 0.5)
+	tex.fill_to = Vector2(1.0, 0.5)
+	tex.width = 128
+	tex.height = 128
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	mat.no_depth_test = true
+	mat.albedo_texture = tex
+	var mi := MeshInstance3D.new()
+	var q := QuadMesh.new()
+	q.size = Vector2(1.7, 1.7)
+	mi.mesh = q
+	mi.material_override = mat
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mi.visible = false
+	add_child(mi)
+	return mi
 
 
 func _marker(c: Color, r: float) -> MeshInstance3D:
@@ -1006,10 +1064,31 @@ func _marker(c: Color, r: float) -> MeshInstance3D:
 
 
 func _update_markers() -> void:
-	var tgt: Player = human.preview_target if human != null else null
-	_pass_marker.visible = tgt != null and phase != Phase.GOAL
-	if tgt != null:
-		_pass_marker.position = Vector3(tgt.position.x, 0.04, tgt.position.z)
+	_pass_marker.visible = false
+	_space_marker.visible = false
+	_aim_reticle.visible = false
+	var hp: Player = human.player if human != null else null
+	if hp != null and ball.carrier == hp and (phase == Phase.PLAY or phase == Phase.RESTART):
+		var shot_kinds := ["shot", "curve", "chip"]
+		if hp.is_charging(shot_kinds) or hp.is_winding(Player.SHOT_KINDS):
+			var kind: String = hp.charge_kind if hp.charge_kind != "" else String(hp.pending.get("kind", "shot"))
+			var ch: float = hp.charge_amount() if hp.charge_kind != "" else float(hp.pending.get("charge", 0.5))
+			var tp := hp.preview_shot_point(kind, ch)
+			var inside := absf(tp.z) < gw * 0.5 and tp.y < gh
+			_aim_reticle.visible = true
+			_aim_reticle.position = Vector3(tp.x, maxf(tp.y, 0.3), clampf(tp.z, -hw, hw))
+			(_aim_reticle.material_override as StandardMaterial3D).albedo_color = Color(1, 1, 1, 0.9) if inside else Color(1.0, 0.25, 0.2, 0.9)
+		else:
+			var kind2 := "through" if hp.is_charging(["through", "through_lob"]) else "pass"
+			var plan := hp.pass_plan(kind2, hp.charge_amount(), hp.aim_dir if hp.aim_active else hp.facing)
+			var tgt: Player = plan["target"]
+			if tgt != null:
+				_pass_marker.visible = true
+				_pass_marker.position = Vector3(tgt.position.x, 0.04, tgt.position.z)
+			if kind2 == "through" or tgt == null:
+				var pt: Vector3 = plan["point"]
+				_space_marker.visible = true
+				_space_marker.position = Vector3(pt.x, 0.05, pt.z)
 	# Metavisión predictiva
 	var show := prediction_active and human != null
 	_land_marker.visible = false

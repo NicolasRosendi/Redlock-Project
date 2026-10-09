@@ -5,6 +5,8 @@ extends Control
 var _rows: Array[Button] = []
 var _desc: Label
 var _pad_label: Label
+var _main: Control
+var _kit: KitEditor
 
 
 func _ready() -> void:
@@ -22,11 +24,14 @@ func _ready() -> void:
 	stripe.rotation = -0.18
 	add_child(stripe)
 
+	_main = Control.new()
+	_main.set_anchors_preset(Control.PRESET_FULL_RECT)
+	add_child(_main)
 	var vb := VBoxContainer.new()
-	vb.position = Vector2(110, 80)
+	vb.position = Vector2(110, 70)
 	vb.custom_minimum_size = Vector2(640, 0)
 	vb.add_theme_constant_override("separation", 10)
-	add_child(vb)
+	_main.add_child(vb)
 
 	var title := Label.new()
 	title.text = "REDLOCK"
@@ -48,6 +53,14 @@ func _ready() -> void:
 	_add_row(vb, "difficulty")
 	_add_row(vb, "duration")
 	_add_row(vb, "camera")
+	var kit := Button.new()
+	kit.text = "★  Kit de habilidades…"
+	kit.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	kit.add_theme_font_size_override("font_size", 22)
+	kit.custom_minimum_size = Vector2(0, 46)
+	kit.pressed.connect(_open_kit)
+	vb.add_child(kit)
+	_rows.append(kit)
 	vb.add_child(_spacer(10))
 	var play := Button.new()
 	play.text = "▶  JUGAR"
@@ -69,17 +82,21 @@ func _ready() -> void:
 	_desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_desc.add_theme_font_size_override("font_size", 20)
 	_desc.add_theme_color_override("font_color", Color(0.85, 0.9, 1.0))
-	add_child(_desc)
+	_main.add_child(_desc)
 	_pad_label = Label.new()
 	_pad_label.position = Vector2(820, 220)
 	_pad_label.add_theme_font_size_override("font_size", 18)
-	add_child(_pad_label)
+	_main.add_child(_pad_label)
 	var hint := Label.new()
 	hint.text = "Cruceta/stick: navegar · Izq/Der: cambiar · Cruz/Enter: aceptar"
 	hint.position = Vector2(110, 840)
 	hint.add_theme_font_size_override("font_size", 16)
 	hint.add_theme_color_override("font_color", Color(1, 1, 1, 0.55))
-	add_child(hint)
+	_main.add_child(hint)
+	_kit = KitEditor.new()
+	_kit.visible = false
+	_kit.closed.connect(_close_kit)
+	add_child(_kit)
 
 	for r in _rows:
 		r.focus_entered.connect(_refresh)
@@ -166,12 +183,25 @@ func _refresh() -> void:
 						"Controlas a todo el equipo: el control salta al jugador con balón o al mejor defensor. R3 cambia manualmente.",
 						"La IA juega contra la IA. Útil para observar el sistema."][GameConfig.control_mode]
 				"awakening":
-					desc = SkillDB.awakening(GameConfig.awakening)["desc"] + "\n\nSe activa con R2 + L2 + Círculo (3 barras de energía)."
+					desc = SkillDB.awakening(GameConfig.awakening)["desc"] + "\n\nSe activa con la técnica DESPERTAR del kit (3 barras de energía)."
 				"size":
 					desc = "El tamaño de la cancha y de los arcos se ajusta al formato."
 				"difficulty":
 					desc = "Afecta reflejos, quites y atajadas del rival."
 	_desc.text = desc
+
+
+func _open_kit() -> void:
+	_main.visible = false
+	_kit.open()
+
+
+func _close_kit() -> void:
+	_main.visible = true
+	for r in _rows:
+		if r.text.begins_with("★"):
+			r.grab_focus()
+	_refresh()
 
 
 func _play() -> void:

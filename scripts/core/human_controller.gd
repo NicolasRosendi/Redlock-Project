@@ -3,18 +3,22 @@ extends RefCounted
 ## Traduce el mando a acciones del jugador. Toda la lógica de botones vive
 ## aquí para poder ajustar el "feel" en un solo sitio.
 ##
-##   Stick izq.  mover            R1  correr          L1  presionar / picar
-##   L2          marcar/proteger  R2  paleta de técnicas (+L2: paleta alterna)
-##   Cruz        pase             Cuadrado  tiro (mantener = potencia)
-##   Triángulo   pase al hueco    Círculo   centro / quite
+##   Stick izq.  mover / apuntar (el balón va hacia donde apunta: "giroscopio")
+##   R1  correr (+Cuadrado: tiro curvo, +Círculo: barrida)
+##   L1  presionar / picar · en modo Equipo, toque corto = cambiar de jugador
+##   L2  marcar / proteger    R2  paleta de técnicas (+L2: paleta alterna)
+##   Cruz pase al más cercano · Triángulo al hueco · Círculo centro / quite
+##   Cuadrado tiro · sin balón: meter el pie (mantener = agarrar con el brazo)
 ##   Stick der.  regates (con L2: regates mejorados)
+
+const L1_TAP := 0.22
 
 var m: Match
 var team: Team
 var player: Player = null
-var preview_target: Player = null
 var _flick_ready := true
 var _switch_cd := 0.0
+var _l1_t0 := -10.0
 var _palette := {}
 var _palette_l2 := {}
 
@@ -33,9 +37,11 @@ func switch_to(p: Player) -> void:
 	if player != null:
 		player.set_human(false)
 		player.charge_kind = ""
+		player.want_arm = false
 	player = p
 	player.set_human(true)
-	player.awakening_id = SkillDB.awakening(GameConfig.awakening)["id"] if not player.awakened else player.awakening_id
+	if not player.awakened:
+		player.awakening_id = SkillDB.awakening(GameConfig.awakening)["id"]
 	_switch_cd = 0.6
 
 
@@ -57,8 +63,8 @@ func update(dt: float) -> void:
 	p.want_mark = false
 	p.want_shield = false
 	p.want_press = false
+	p.want_arm = false
 	p.path_boost = false
-	preview_target = null
 
 	var stick := Input.get_vector("move_left", "move_right", "move_up", "move_down")
 	var dir := m.cam.stick_to_world(stick)
@@ -68,7 +74,8 @@ func update(dt: float) -> void:
 	var r2 := Input.is_action_pressed("power")
 	p.move_dir = dir
 	p.want_sprint = r1
-	p.aim_dir = dir.normalized() if dir.length() > 0.2 else p.facing
+	p.aim_active = dir.length() > 0.3
+	p.aim_dir = dir.normalized() if p.aim_active else p.facing
 
 	if Input.is_action_just_pressed("awaken_next"):
 		_cycle_awakening(1)
@@ -87,11 +94,19 @@ func update(dt: float) -> void:
 	var opp_has := b.carrier != null and b.carrier.team != p.team
 	var mate_has := b.carrier != null and b.carrier.team == p.team and not has_ball
 
-	# Movimiento asistido sin balón
+	# L1: en modo Equipo un toque corto cambia de jugador; mantenerlo presiona
+	if Input.is_action_just_pressed("press"):
+		_l1_t0 = m.time
+	var l1_hold := l1 and (has_ball or not is_team_mode() or m.time - _l1_t0 > L1_TAP)
+	if is_team_mode() and not has_ball and not mate_has and Input.is_action_just_released("press") and m.time - _l1_t0 <= L1_TAP:
+		var nxt := _best_defender(true)
+		if nxt != null:
+			switch_to(nxt)
+			m.notify("Cambio: %s" % nxt.player_name, Color(1.0, 0.9, 0.4))
+			return
+
 	if has_ball:
 		p.want_shield = l2
-		if not r2:
-			preview_target = p.team.find_pass_target(p, p.aim_dir, false)
 	else:
 		if l2:
 			p.want_mark = true
@@ -104,7 +119,7 @@ func update(dt: float) -> void:
 				var guard := focus + (own - focus).normalized() * 1.8
 				var to := p.flat_to(guard)
 				p.move_dir = to.normalized() * clampf(to.length(), 0.0, 1.0) if to.length() > 0.2 else Vector3.ZERO
-		if l1 and (opp_has or b.carrier == null):
+		if l1_hold and (opp_has or b.carrier == null):
 			p.want_press = true
 			var target: Vector3
 			if opp_has:
@@ -115,6 +130,13 @@ func update(dt: float) -> void:
 			var to2 := p.flat_to(target)
 			if to2.length() > 0.3:
 				p.move_dir = to2.normalized()
+		# Recepción asistida: si el pase viene a mí y no toco el stick, voy al balón
+		if b.carrier == null and b.pass_target == p and stick.length() < 0.2:
+			var ip: Vector3 = m.intercept_point(p)["pos"]
+			var to3 := p.flat_to(ip)
+			p.move_dir = to3.normalized() * clampf(to3.length() / 1.5, 0.0, 1.0) if to3.length() > 0.25 else Vector3.ZERO
+			p.has_look = true
+			p.look_target = b.position
 
 	_prediction_assist(p)
 
@@ -127,16 +149,16 @@ func update(dt: float) -> void:
 				var sid: String = pal.get(btn, "")
 				if sid != "":
 					p.try_special(sid)
-				elif p.is_human:
-					m.notify("Ranura libre (personalizable)", Color(0.7, 0.7, 0.75))
+				else:
+					m.notify("Ranura libre (arma tu kit en el menú)", Color(0.7, 0.7, 0.75))
 	else:
-		_buttons(p, has_ball, opp_has, mate_has, l1)
+		_buttons(p, has_ball, opp_has, mate_has, l1, r1)
 
 	_dribble_flicks(p, has_ball, l2)
 	_switching(p, opp_has, has_ball)
 
 
-func _buttons(p: Player, has_ball: bool, opp_has: bool, mate_has: bool, l1: bool) -> void:
+func _buttons(p: Player, has_ball: bool, opp_has: bool, mate_has: bool, l1: bool, r1: bool) -> void:
 	var jp_x := Input.is_action_just_pressed("btn_cross")
 	var jr_x := Input.is_action_just_released("btn_cross")
 	var jp_sq := Input.is_action_just_pressed("btn_square")
@@ -147,7 +169,7 @@ func _buttons(p: Player, has_ball: bool, opp_has: bool, mate_has: bool, l1: bool
 	var jr_ci := Input.is_action_just_released("btn_circle")
 
 	# Cancelaciones (amague) y tiro raso con doble toque
-	var shot_kinds := ["shot", "chip"]
+	var shot_kinds := ["shot", "chip", "curve"]
 	var pass_kinds := ["pass", "pass_lob", "through", "through_lob", "cross"]
 	if p.is_charging(shot_kinds) or p.is_winding(shot_kinds + ["ground"]):
 		if jp_x:
@@ -177,8 +199,13 @@ func _buttons(p: Player, has_ball: bool, opp_has: bool, mate_has: bool, l1: bool
 			p.begin_charge("cross")
 		elif jr_ci and p.is_charging(["cross"]):
 			p.release_charge()
-		if jp_sq and not p.is_winding(["shot", "ground"]):
-			p.begin_charge("chip" if l1 else "shot")
+		if jp_sq and not p.is_winding(["shot", "ground", "curve", "chip"]):
+			var kind := "shot"
+			if l1:
+				kind = "chip"
+			elif r1:
+				kind = "curve"
+			p.begin_charge(kind)
 		elif jr_sq and p.is_charging(shot_kinds):
 			p.release_charge()
 	elif mate_has:
@@ -191,9 +218,13 @@ func _buttons(p: Player, has_ball: bool, opp_has: bool, mate_has: bool, l1: bool
 			m.notify("¡Al hueco!", Color(1.0, 0.9, 0.4))
 	elif opp_has:
 		if jp_ci:
-			p.do_tackle()
+			if r1:
+				p.do_slide()
+			else:
+				p.do_tackle()
 		if jp_sq:
-			p.do_slide()
+			p.do_poke()
+		p.want_arm = Input.is_action_pressed("btn_square")
 		if jp_x:
 			p.do_shoulder()
 	else:
@@ -201,9 +232,9 @@ func _buttons(p: Player, has_ball: bool, opp_has: bool, mate_has: bool, l1: bool
 		var near := Match.flat_dist(p.position, m.ball.position) < 9.0
 		if jp_sq:
 			if near:
-				p.queue_first_time("shot")
+				p.queue_first_time("curve" if r1 else "shot")
 			else:
-				p.do_slide()
+				p.do_poke()
 		if jp_x and near:
 			p.queue_first_time("pass_lob" if l1 else "pass")
 		if jp_tri and near:
@@ -211,6 +242,8 @@ func _buttons(p: Player, has_ball: bool, opp_has: bool, mate_has: bool, l1: bool
 		if jp_ci:
 			if near and m.ball.position.y > 0.6:
 				p.queue_first_time("cross")
+			elif r1:
+				p.do_slide()
 			else:
 				p.do_tackle()
 
@@ -237,7 +270,7 @@ func _switching(p: Player, opp_has: bool, has_ball: bool) -> void:
 		return
 	if _switch_cd > 0.0 or p.state != Player.State.NORMAL:
 		return
-	if Input.is_action_pressed("btn_circle") or Input.is_action_pressed("press") or Input.is_action_pressed("mark"):
+	if Input.is_action_pressed("btn_circle") or Input.is_action_pressed("btn_square") or Input.is_action_pressed("press") or Input.is_action_pressed("mark"):
 		return
 	var b := m.ball
 	if not opp_has and b.carrier != null:
@@ -251,16 +284,21 @@ func _switching(p: Player, opp_has: bool, has_ball: bool) -> void:
 		switch_to(best2)
 
 
+## Mejor candidato para el cambio: el que llega antes al balón (o al portador).
 func _best_defender(exclude_current: bool) -> Player:
 	var b := m.ball
 	var best: Player = null
-	var bd := INF
+	var bt := INF
 	for q in team.players:
 		if q.role == Player.Role.GK or (exclude_current and q == player):
 			continue
-		var d := Match.flat_dist(q.position, b.position)
-		if d < bd:
-			bd = d
+		var t: float
+		if b.carrier == null:
+			t = m.intercept_point(q)["t"]
+		else:
+			t = Match.flat_dist(q.position, b.position) / q.top_speed()
+		if t < bt:
+			bt = t
 			best = q
 	return best
 

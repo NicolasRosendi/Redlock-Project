@@ -20,6 +20,7 @@ func _ready() -> void:
 	_test_ground_pass()
 	_test_lob()
 	_test_aimed()
+	_test_curved()
 	GameConfig.control_mode = GameConfig.ControlMode.AI_ONLY
 	GameConfig.team_size = 11
 	m = load("res://scenes/match.tscn").instantiate()
@@ -74,7 +75,7 @@ func _test_lob() -> void:
 
 
 func _test_aimed() -> void:
-	var cases := [[20.0, 0.0, 0.0, 25.0], [20.0, 0.5, 0.12, 22.0], [25.0, -0.6, 0.12, 18.0], [22.0, 0.45, 1.3, 33.0], [16.0, 0.0, 0.5, 36.0]]
+	var cases := [[20.0, 0.0, 0.0, 25.0], [20.0, 0.5, 0.12, 22.0], [25.0, -0.6, 0.12, 22.0], [22.0, 0.45, 1.3, 33.0], [16.0, 0.0, 0.5, 36.0]]
 	for c in cases:
 		var from := Vector3(0, Ball.RADIUS, 2.0)
 		var target := Vector3(c[0], 1.6, -2.5)
@@ -82,6 +83,26 @@ func _test_aimed() -> void:
 		var p := _sim(from, v, c[1], c[2], c[0])
 		var err := Vector2(p.y - target.y, p.z - target.z).length()
 		_check("tiro d=%d efecto=%.2f top=%.1f v=%d" % [c[0], c[1], c[2], c[3]], err < 0.6, "error %.2fm (y=%.2f z=%.2f)" % [err, p.y, p.z])
+
+
+func _test_curved() -> void:
+	# Pases "giroscopio": salen hacia el stick y la curva los lleva al objetivo
+	var cases := [[14.0, 18.0, false], [20.0, -20.0, false], [25.0, 25.0, true], [9.0, 22.0, false]]
+	for c in cases:
+		var from := Vector3(0, Ball.RADIUS, 0)
+		var to := Vector3(c[0], 0, 0)
+		var hint := Vector3.RIGHT.rotated(Vector3.UP, deg_to_rad(c[1]))
+		var res := Kick.curved(from, to, hint, c[2], 7.0, 4.0, Ball.RADIUS)
+		var v: Vector3 = res["vel"]
+		var r := [from, v, res["side"], 0.0]
+		var best := INF
+		for i in 600:
+			r = Ball.integrate(r[0], r[1], r[2], r[3], 1.0 / 120.0)
+			var p: Vector3 = r[0]
+			best = minf(best, Vector2(p.x - to.x, p.z - to.z).length())
+		var launch := rad_to_deg(Vector3.RIGHT.signed_angle_to(Vector3(v.x, 0, v.z), Vector3.UP))
+		_check("pase curvo %dm stick %+d°%s" % [c[0], c[1], " (bombeado)" if c[2] else ""], best < 0.7 and absf(launch) > 4.0,
+			"sale a %+.0f°, pasa a %.2fm del objetivo, efecto %.2f" % [launch, best, res["side"]])
 
 
 func _physics_process(dt: float) -> void:
@@ -134,5 +155,6 @@ func _physics_process(dt: float) -> void:
 	b.place(shooter.position + shooter.facing * 0.5)
 	b.set_carrier(shooter)
 	shooter.aim_dir = Vector3(0.6, 0, s["aim"]).normalized()
+	shooter.aim_active = true
 	shooter.perform("shot", s["charge"], {})
 	_t = 0.0

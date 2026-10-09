@@ -2,15 +2,16 @@ class_name Player
 extends Node3D
 ## Futbolista. Lo manejan el control humano o la IA escribiendo "intenciones"
 ## (move_dir, want_sprint, ...) y llamando a acciones (perform, do_tackle...).
-## Aquí vive toda la lógica de estamina, energía, despertar, tiros, pases,
-## quites, regates y técnicas especiales.
+## Aquí vive la lógica de estamina, energía, despertar, tiros, pases, quites,
+## regates, técnicas especiales y la animación procedural del cuerpo.
 
 enum Role { GK, DEF, MID, FWD }
-enum State { NORMAL, KICK, TACKLE, SLIDE, SHOULDER, STUN, DIVE, DASH, SKILL, CELEBRATE }
+enum State { NORMAL, KICK, TACKLE, SLIDE, SHOULDER, POKE, STUN, DIVE, DASH, SKILL, CELEBRATE }
 
 const BODY_RADIUS := 0.38
 const JUMP_GRAVITY := 18.0
-const SHOT_KINDS := ["shot", "chip", "ground", "volley", "header"]
+const HIP_Y := 0.93
+const SHOT_KINDS := ["shot", "curve", "chip", "ground", "volley", "header"]
 const PASS_KINDS := ["pass", "pass_lob", "through", "through_lob", "cross"]
 
 var m: Match
@@ -39,9 +40,12 @@ var want_sprint := false
 var want_mark := false
 var want_shield := false
 var want_press := false
+var want_arm := false
 var has_look := false
 var look_target := Vector3.ZERO
+## Dirección del stick ("giroscopio") y si el stick está inclinado.
 var aim_dir := Vector3.RIGHT
+var aim_active := false
 var frozen := false
 
 # Recursos
@@ -57,6 +61,8 @@ var evade_until := 0.0
 var no_touch_until := 0.0
 var burst_until := 0.0
 var phantom_until := 0.0
+var grabbed_until := 0.0
+var wall_until := 0.0
 var restart_lock := false
 var restart_kind := ""
 var making_run := false
@@ -77,23 +83,43 @@ var dribble_check := {}
 var phantom_hit := {}
 var dive_side := 1.0
 var dive_target := Vector3.ZERO
+var fallen := false
+var arm_target: Player = null
+var arm_time := 0.0
+var _arm_resolved := false
 
 # Visual
-var _body: Node3D
-var _leg_l: Node3D
-var _leg_r: Node3D
+var _root: Node3D
+var _pelvis: Node3D
+var _torso: Node3D
+var _head: Node3D
+var _thigh_l: Node3D
+var _knee_l: Node3D
+var _thigh_r: Node3D
+var _knee_r: Node3D
 var _arm_l: Node3D
+var _elbow_l: Node3D
 var _arm_r: Node3D
+var _elbow_r: Node3D
+var _pose := {}
 var _ring: MeshInstance3D
 var _arrow: MeshInstance3D
 var _aura: Node3D
 var _aura_mat: StandardMaterial3D
 var _aura_light: OmniLight3D
 var _aura_particles: CPUParticles3D
+var _wall_fx: MeshInstance3D
+var _wall_mat: StandardMaterial3D
 var _anim_phase := 0.0
 var _kick_anim := 0.0
+var _kick_was_header := false
+var _touch_anim := 0.0
+var _touch_leg := 1.0
+var _receive_anim := 0.0
 var _ghost_t := 0.0
-var _shirt_mat: StandardMaterial3D
+var _dust_t := 0.0
+var _turn_rate := 0.0
+var _spin := 0.0
 
 
 func setup(match_ref: Match, team_ref: Team, role_: int, num: int, name_: String, stats_: Dictionary, home_: Vector2) -> void:
@@ -150,7 +176,7 @@ func can_act() -> bool:
 func can_touch() -> bool:
 	if frozen or m.time < no_touch_until:
 		return false
-	return state == State.NORMAL or state == State.DIVE or state == State.DASH or state == State.TACKLE
+	return state == State.NORMAL or state == State.DIVE or state == State.DASH or state == State.TACKLE or state == State.POKE
 
 
 func is_evading() -> bool:
@@ -165,6 +191,10 @@ func speed_h() -> float:
 	return Vector2(velocity.x, velocity.z).length()
 
 
+func skill_dir_or_facing() -> Vector3:
+	return skill_ball_dir if state == State.SKILL else facing
+
+
 func max_speed() -> float:
 	var base := 5.4 + 1.4 * st("speed")
 	if want_sprint and stamina > 3.0:
@@ -175,8 +205,12 @@ func max_speed() -> float:
 		base = minf(base, 4.2 + st("speed"))
 	if want_shield and has_ball():
 		base *= 0.55
+	if want_arm and arm_target != null:
+		base = minf(base, 6.0)
 	if stamina < 12.0:
 		base *= 0.82
+	if m.time < grabbed_until:
+		base *= 0.75
 	if is_awakened_as("velocidad"):
 		base *= 1.18
 	elif awakened:
@@ -204,6 +238,8 @@ func accel() -> float:
 	var a := 13.0 + 10.0 * st("accel")
 	if is_awakened_as("velocidad"):
 		a *= 1.4
+	if m.time < grabbed_until:
+		a *= 0.6
 	return a
 
 
@@ -274,7 +310,7 @@ func _update_resources(dt: float) -> void:
 		spend_stamina(2.5 * dt)
 	elif want_mark:
 		spend_stamina(1.0 * dt)
-	elif state == State.NORMAL:
+	elif state == State.NORMAL and arm_target == null:
 		var regen := 4.0 if spd > 2.5 else 7.0
 		if is_awakened_as("fisico"):
 			regen *= 3.0
@@ -310,6 +346,7 @@ func tick(dt: float) -> void:
 	match state:
 		State.NORMAL:
 			_move_normal(dt)
+			_arm_hold(dt)
 		State.KICK:
 			velocity = velocity.move_toward(Vector3.ZERO, 18.0 * dt)
 			if not pending.is_empty() and not pending.get("done", false) and state_time >= float(pending.get("windup", 0.0)):
@@ -322,10 +359,20 @@ func tick(dt: float) -> void:
 				_tackle_contact(1.0 + st("tackle") * 0.35, false)
 			if state_time >= state_dur:
 				_set_state(State.NORMAL)
+		State.POKE:
+			velocity = velocity.move_toward(Vector3.ZERO, 14.0 * dt)
+			if state_time > 0.04 and state_time < 0.2 and not tackle_done:
+				_poke_contact()
+			if state_time >= state_dur:
+				_set_state(State.NORMAL)
 		State.SLIDE:
-			velocity = velocity.move_toward(Vector3.ZERO, 9.0 * dt)
+			velocity = velocity.move_toward(Vector3.ZERO, 8.5 * dt)
+			_dust_t -= dt
+			if _dust_t <= 0.0 and speed_h() > 2.0:
+				_dust_t = 0.05
+				FX.dust(position + facing * 0.6, 5)
 			if state_time < 0.6 and not tackle_done:
-				_tackle_contact(1.05, true)
+				_tackle_contact(1.1, true)
 			if state_time >= state_dur:
 				_set_state(State.NORMAL)
 		State.SHOULDER:
@@ -335,8 +382,9 @@ func tick(dt: float) -> void:
 			if state_time >= state_dur:
 				_set_state(State.NORMAL)
 		State.STUN:
-			velocity = velocity.move_toward(Vector3.ZERO, 10.0 * dt)
+			velocity = velocity.move_toward(Vector3.ZERO, (6.0 if fallen else 10.0) * dt)
 			if state_time >= state_dur:
+				fallen = false
 				_set_state(State.NORMAL)
 		State.DIVE:
 			var rem := flat_to(dive_target)
@@ -351,6 +399,11 @@ func tick(dt: float) -> void:
 			_dash_tick(dt)
 		State.SKILL:
 			velocity = skill["dir"] * float(skill["speed"])
+			if skill.get("ghost", false):
+				_ghost_t -= dt
+				if _ghost_t <= 0.0:
+					_ghost_t = 0.03
+					FX.afterimage(self, skill.get("color", Color.WHITE), 0.3)
 			if state_time >= state_dur:
 				var keep: Vector3 = skill["dir"] * minf(float(skill["speed"]), 5.5)
 				if skill.get("turn", false):
@@ -419,7 +472,10 @@ func _move_normal(dt: float) -> void:
 		turn_rate = 7.0 + 6.0 * st("dribble")
 		if want_sprint:
 			turn_rate *= 0.75
+	var before := facing
 	facing = _turn(facing, face, turn_rate * dt)
+	if dt > 0.0:
+		_turn_rate = lerpf(_turn_rate, before.signed_angle_to(facing, Vector3.UP) / dt, 0.2)
 
 
 func _turn(from: Vector3, to: Vector3, max_angle: float) -> Vector3:
@@ -436,6 +492,16 @@ func _clamp_field() -> void:
 	# No meterse dentro de la portería
 	if absf(position.x) > m.hl - 0.1 and absf(position.z) < m.gw * 0.5 + 0.4:
 		position.x = signf(position.x) * (m.hl - 0.1)
+
+
+func on_ball_touch() -> void:
+	_touch_anim = 0.16
+	_touch_leg = -_touch_leg
+
+
+func on_receive() -> void:
+	_receive_anim = 0.28
+	charge_kind = ""
 
 
 # ---------------------------------------------------------------- carga / patadas
@@ -474,18 +540,18 @@ func perform(kind: String, charge: float, opts: Dictionary) -> void:
 		return
 	if restart_lock and restart_kind == "throw_in" and SHOT_KINDS.has(kind):
 		kind = "pass"
-	var windup := 0.09
+	var windup := 0.1
 	if SHOT_KINDS.has(kind):
-		windup = 0.16
+		windup = 0.17
 	if opts.has("special"):
 		windup = float(opts.get("windup", 0.22))
 	charge_kind = ""
 	pending = {"kind": kind, "charge": charge, "opts": opts, "windup": windup, "done": false}
 	if ft:
 		_execute_kick()
-		_set_state(State.KICK, 0.2)
+		_set_state(State.KICK, 0.22)
 		return
-	_set_state(State.KICK, windup + 0.16)
+	_set_state(State.KICK, windup + 0.18)
 
 
 ## Cancelación (amague): pulsar rápido tiro + pase.
@@ -500,6 +566,7 @@ func cancel_kick() -> void:
 		velocity *= 0.5
 		gain_energy(SkillDB.GAIN["feint"])
 		m.notify("Amague de %s" % player_name, Color(0.85, 0.85, 0.9))
+		FX.popup(position, "AMAGUE", Color(0.85, 0.9, 1.0), 0.7)
 		m.stats["feints"] += 1
 
 
@@ -521,6 +588,8 @@ func first_time_kick() -> void:
 	var kind: String = ft["kind"]
 	var end_t: float = ft.get("released", m.time)
 	var c := clampf((end_t - float(ft["start"])) / 0.9, 0.3, 1.0)
+	if ft.has("charge"):
+		c = ft["charge"]
 	var bh := m.ball.position.y - height
 	if kind == "shot":
 		if bh > 1.15:
@@ -544,11 +613,31 @@ func _execute_kick() -> void:
 		return
 	restart_lock = false
 	_kick_anim = 0.3
+	_kick_was_header = kind == "header"
 	spend_stamina(1.5)
 	if SHOT_KINDS.has(kind):
 		_kick_shot(kind, charge, opts)
 	elif PASS_KINDS.has(kind):
 		_kick_pass(kind, charge, opts)
+
+
+## Plan de pase según la dirección del stick (también lo usa el indicador del
+## HUD): pase normal al más cercano en esa dirección; al hueco, al espacio
+## que hay delante del compañero en la dirección del stick.
+func pass_plan(kind: String, charge: float, dir: Vector3) -> Dictionary:
+	var d := Vector3(dir.x, 0.0, dir.z)
+	d = d.normalized() if d.length() > 0.1 else facing
+	if kind.begins_with("through"):
+		var t := team.through_target(self, d)
+		if t == null:
+			return {"target": null, "point": m.clamp_in_field(position + d * (10.0 + charge * 18.0), 1.0)}
+		var space_dir := (d * 0.8 + team.attack_dir() * 0.2).normalized()
+		var pt := t.position + space_dir * (5.0 + charge * 9.0)
+		return {"target": t, "point": m.clamp_in_field(pt, 1.5)}
+	var t2 := team.nearest_in_direction(self, d)
+	if t2 == null:
+		return {"target": null, "point": m.clamp_in_field(position + d * (8.0 + charge * 20.0), 1.0)}
+	return {"target": t2, "point": t2.position}
 
 
 func _kick_pass(kind: String, charge: float, opts: Dictionary) -> void:
@@ -557,61 +646,65 @@ func _kick_pass(kind: String, charge: float, opts: Dictionary) -> void:
 	var through := kind.begins_with("through")
 	var lofted := kind == "pass_lob" or kind == "through_lob" or kind == "cross"
 	var sid: String = opts.get("special", "")
-	var target: Player = opts.get("target", null)
+	var active: bool = opts.get("aim_active", aim_active)
 	var aim: Vector3 = opts.get("aim", aim_dir)
-	if target == null and not opts.has("point"):
-		target = team.find_pass_target(self, aim, through)
+	var target: Player = opts.get("target", null)
 	var point: Vector3
 	if opts.has("point"):
 		point = opts["point"]
-	elif target == null:
-		var ad := Vector3(aim.x, 0.0, aim.z)
-		point = from + (ad.normalized() if ad.length() > 0.1 else facing) * (10.0 + charge * 22.0)
-	else:
+	elif target != null:
 		point = target.position
-	var arrive := 5.0 + charge * 6.0
-	if sid != "":
-		arrive = 15.0
-	if target != null:
-		var lead_dir := Vector3.ZERO
 		if through:
-			lead_dir = (target.team.attack_dir() * 0.7 + target.flat_to(target.position + target.velocity).normalized() * 0.3)
-			lead_dir = lead_dir.normalized()
-			point = target.position + lead_dir * (4.0 + charge * 9.0)
-			point = m.clamp_in_field(point, 1.5)
-			if target.brain != null:
-				target.brain.run_to(point, 2.5)
-		else:
-			for i in 2:
-				var d := Match.flat_dist(from, point)
-				var t: float
-				if lofted:
-					t = Kick.lob_time(from.y, _lob_apex(kind, d), 1.4 if kind == "cross" else Ball.RADIUS)
-				else:
-					t = Kick.ground_time(Kick.ground_speed_for(d, arrive), d)
-				point = target.position + target.velocity * t * 0.85
-				point = m.clamp_in_field(point, 0.5)
-	var vel: Vector3
-	var dist := Match.flat_dist(from, point)
-	if lofted:
-		var land_y := 1.4 if kind == "cross" else Ball.RADIUS
-		var land := point
-		if kind != "cross":
-			land = from + (point - from) * 0.88
-		vel = Kick.lob(from, land, _lob_apex(kind, dist), land_y)
+			point = m.clamp_in_field(target.position + team.attack_dir() * (5.0 + charge * 8.0), 1.5)
 	else:
-		vel = Kick.ground_pass(from, point, arrive)
-		if sid != "":
-			var hv := vel.length()
-			if hv < 28.0 and hv > 0.01:
-				vel *= 28.0 / hv
-	var err := (1.0 - st("passing")) * 0.12 + pressure() * 0.06
+		var plan := pass_plan(kind, charge, aim if active else facing)
+		target = plan["target"]
+		point = plan["point"]
+	# Hacia dónde sale el balón: la del stick ("giroscopio") o recto al objetivo
+	var hint := Vector3.ZERO
+	if opts.has("hint"):
+		hint = opts["hint"]
+	elif active and not opts.has("target") and not opts.has("point"):
+		hint = aim
+	var arrive := 6.5 + charge * 5.0
+	if through:
+		arrive = 3.5 + charge * 3.0
+	if sid != "":
+		arrive = 14.0
+	var land_y := Ball.RADIUS
+	if kind == "cross":
+		land_y = 1.5
+	if sid == "centro_teledirigido":
+		land_y = 1.55
+	# Adelantarse a la carrera del receptor
+	if target != null and not through and not opts.has("point"):
+		for i in 2:
+			var d := Match.flat_dist(from, point)
+			var t: float
+			if lofted:
+				t = Kick.lob_time(from.y, _lob_apex(kind, d), land_y)
+			else:
+				t = Kick.ground_time(Kick.ground_speed_for(d, arrive), d)
+			point = m.clamp_in_field(target.position + target.velocity * t * 0.7, 0.5)
+	var dist := Match.flat_dist(from, point)
+	var land := point
+	if lofted and kind != "cross" and sid == "":
+		land = from + (point - from) * 0.94
+	var res := Kick.curved(from, land, hint, lofted, arrive, _lob_apex(kind, dist), land_y)
+	var vel: Vector3 = res["vel"]
+	var side: float = res["side"]
+	if sid == "pase_meteoro":
+		var hv := Vector2(vel.x, vel.z).length()
+		if hv < 28.0 and hv > 0.01:
+			vel = Vector3(vel.x, 0.0, vel.z) * (28.0 / hv)
+			side = 0.0
+	var err := (1.0 - st("passing")) * 0.07 + pressure() * 0.04
 	if sid != "":
 		err = 0.0
 	vel = vel.rotated(Vector3.UP, randf_range(-err, err))
 	if vel.length() > 40.0:
 		vel = vel.normalized() * 40.0
-	b.kick(self, vel, "cross" if kind == "cross" else "pass")
+	b.kick(self, vel, "cross" if kind == "cross" else "pass", side, 0.0)
 	b.pass_target = target
 	b.pass_through = through
 	b.last_passer = self
@@ -623,99 +716,158 @@ func _kick_pass(kind: String, charge: float, opts: Dictionary) -> void:
 		b.set_trail(true, sd["color"])
 	if target != null and target.brain != null:
 		target.brain.expect_pass()
+		if through:
+			target.brain.run_to(point, 2.5)
+	if sid == "centro_teledirigido" and target != null:
+		var tt := Kick.lob_time(from.y, _lob_apex(kind, dist), land_y)
+		target.first_time = {"kind": "shot", "start": m.time, "until": m.time + tt + 0.8, "charge": 0.85}
+		if target.brain != null:
+			target.brain.run_to(point, tt)
 	m.on_pass(self, target, through)
 
 
 func _lob_apex(kind: String, d: float) -> float:
 	if kind == "cross":
-		return clampf(3.0 + d * 0.08, 3.0, 9.0)
-	return clampf(2.4 + d * 0.15, 2.4, 14.0)
+		return clampf(2.8 + d * 0.07, 2.8, 7.5)
+	return clampf(2.0 + d * 0.11, 2.0, 9.0)
+
+
+## Punto del arco al que apunta el stick (antes del error aleatorio).
+## Funciona como un giroscopio: el balón va hacia donde apunta el stick.
+## Con el stick suelto, apunta solo al palo contrario del portero.
+func _shot_aim(kind: String, charge: float, aim: Vector3, active: bool, opts: Dictionary) -> Vector3:
+	var from := m.ball.position
+	var goal := team.opp_goal()
+	var half := m.gw * 0.5
+	var z_aim: float
+	if opts.has("z"):
+		z_aim = opts["z"]
+	elif not active:
+		var gk := team.opponent.gk()
+		var gz := gk.position.z if gk != null else 0.0
+		# Asistido: hacia el palo contrario, pero no a la escuadra perfecta
+		if absf(gz) > 0.3:
+			z_aim = -signf(gz) * (half - 1.0)
+		elif absf(from.z) > 1.5:
+			z_aim = -signf(from.z) * (half - 1.0)
+		else:
+			z_aim = half - 1.0
+	else:
+		var to_center := Vector3(goal.x - from.x, 0.0, goal.z - from.z).normalized()
+		var theta := clampf(to_center.signed_angle_to(Vector3(aim.x, 0.0, aim.z), Vector3.UP) * 0.5, -1.2, 1.2)
+		var dir := to_center.rotated(Vector3.UP, theta)
+		var dx := goal.x - from.x
+		if absf(dir.x) < 0.08 or signf(dir.x) != signf(dx):
+			z_aim = signf(dir.z) * (half + 25.0)
+		else:
+			z_aim = from.z + dir.z * dx / dir.x
+		# Asistencia: si apuntas cerca del arco, el tiro se mete dentro
+		if absf(z_aim) < half + 1.2:
+			z_aim = clampf(z_aim, -(half - 0.35), half - 0.35)
+	var y_aim: float = opts.get("y", lerpf(0.3, m.gh - 0.45, clampf(charge / 0.85, 0.0, 1.0)))
+	match kind:
+		"ground":
+			y_aim = Ball.RADIUS
+		"header":
+			y_aim = 0.45
+		"chip":
+			y_aim = clampf(y_aim, 1.2, m.gh - 0.3)
+	var over := maxf(charge - 0.85, 0.0) / 0.15
+	if kind != "ground" and not opts.has("special"):
+		y_aim += over * 1.3
+	return Vector3(goal.x, y_aim, z_aim)
+
+
+func preview_shot_point(kind: String, charge: float) -> Vector3:
+	return _shot_aim(kind, charge, aim_dir, aim_active, {})
 
 
 func _kick_shot(kind: String, charge: float, opts: Dictionary) -> void:
 	var b := m.ball
 	var from := b.position
-	var goal := team.opp_goal()
 	var half := m.gw * 0.5
 	var sid: String = opts.get("special", "")
+	var active: bool = opts.get("aim_active", aim_active)
 	var aim: Vector3 = opts.get("aim", aim_dir)
-	var z_aim: float
-	if opts.has("z"):
-		z_aim = opts["z"]
-	elif absf(aim.z) < 0.3 or kind == "header":
-		var gk := team.opponent.gk()
-		var gz := gk.position.z if gk != null else 0.0
-		if absf(gz) > 0.3:
-			z_aim = -signf(gz) * (half - 0.6)
-		elif absf(from.z) > 1.5:
-			z_aim = -signf(from.z) * (half - 0.6)
-		else:
-			z_aim = (half - 0.6) * (1.0 if randf() < 0.5 else -1.0)
-		if absf(aim.z) >= 0.3:
-			z_aim = clampf(aim.z * 1.3, -1.0, 1.0) * (half - 0.45)
-	else:
-		z_aim = clampf(aim.z * 1.3, -1.0, 1.0) * (half - 0.45)
+	var target := _shot_aim(kind, charge, aim, active, opts)
 	var power_mul := 0.85 + 0.3 * st("shot_power")
 	if is_awakened_as("tiro"):
 		power_mul *= 1.2
 	var speed := lerpf(15.0, 31.0, charge) * power_mul
-	var y_aim: float = opts.get("y", lerpf(0.3, m.gh - 0.5, clampf(charge * 0.95, 0.0, 1.0)))
 	var top := 0.12
 	var side := 0.0
-	var dist := Match.flat_dist(from, goal)
+	var comp := 1.0
+	var dist := Match.flat_dist(from, target)
 	var over := maxf(charge - 0.85, 0.0) / 0.15
-	var err := (1.0 - st("shot_acc")) * 0.8 + pressure() * 0.5 + over * 0.8 + dist / 45.0
+	var err := (1.0 - st("shot_acc")) * 0.6 + pressure() * 0.4 + over * 0.5 + dist / 60.0
 	match kind:
 		"ground":
 			speed *= 0.92
-			y_aim = Ball.RADIUS
 			top = 0.0
 		"volley":
 			speed *= 1.05
 			err *= 1.25
 		"header":
 			speed = (11.0 + 9.0 * charge) * (1.35 if is_awakened_as("salto") else 1.0)
-			y_aim = 0.45
 			err *= 1.1
 			top = 0.0
 			gain_energy(SkillDB.GAIN["header"])
+		"curve":
+			# Tiro curvo (R1): mucho efecto. La compensación no es perfecta,
+			# así que puede abrirse y salir desviado.
+			speed = lerpf(14.0, 27.0, charge) * power_mul
+			err *= 1.3
+			comp = randf_range(0.8, 1.45)
 	var sd := {}
 	if sid != "":
 		sd = SkillDB.special(sid)
 		err *= 0.2
-		over = 0.0
+		comp = 1.0
 		match sid:
 			"disparo_directo":
 				speed = 36.0 * (1.1 if is_awakened_as("tiro") else 1.0)
 				top = 0.5
-				y_aim = clampf(y_aim, 0.5, m.gh - 0.6)
+				target.y = clampf(target.y, 0.5, m.gh - 0.6)
+			"curva_del_ego":
+				speed = 30.0
+				top = 0.3
+				target.y = clampf(target.y, 0.6, m.gh - 0.5)
+			"tiro_fantasma":
+				speed = 31.0
+				top = 0.0
+				target.y = clampf(target.y, 0.6, m.gh - 0.6)
 			"meteoro_descendente":
 				speed = 33.0
 				top = 1.3
-				y_aim = m.gh - 0.4
-				z_aim = (signf(z_aim) if absf(z_aim) > 0.01 else 1.0) * (half - 0.45)
-	var target := Vector3(goal.x, y_aim, z_aim)
-	target.z += randf_range(-1.0, 1.0) * err * 1.1
-	target.y += randf_range(-0.35, 0.9) * err * 0.8 + over * randf() * 1.4
+				target.y = m.gh - 0.4
+				if absf(target.z) <= half:
+					target.z = (signf(target.z) if absf(target.z) > 0.01 else 1.0) * (half - 0.45)
+	target.z += randf_range(-1.0, 1.0) * err * 1.0
+	target.y += randf_range(-0.35, 0.8) * err * 0.7 + over * randf() * 1.2
 	target.y = maxf(target.y, Ball.RADIUS)
 	var dir := Vector3(target.x - from.x, 0.0, target.z - from.z).normalized()
+	var lat := Vector3.UP.cross(dir)
+	var inward := signf(lat.dot(Vector3(0, 0, -target.z))) if absf(target.z) > 0.15 else signf(facing.cross(dir).y + 0.001)
 	if (kind == "shot" or kind == "volley") and sid == "":
 		var crossv := facing.cross(dir).y
 		side = clampf(crossv * 1.5, -1.0, 1.0) * (0.25 + (1.0 - charge) * 0.4)
-	if sid == "meteoro_descendente":
-		var lat := Vector3.UP.cross(dir)
-		side = 0.45 * (signf(lat.dot(Vector3(0, 0, -target.z))) if absf(target.z) > 0.1 else 1.0)
+	elif kind == "curve":
+		side = 0.95 * inward
+	match sid:
+		"curva_del_ego":
+			side = 1.35 * inward
+		"meteoro_descendente":
+			side = 0.45 * inward
 	var vel: Vector3
 	if kind == "chip":
 		var apex := clampf(3.0 + dist * 0.09, 3.2, 9.0)
-		target.y = clampf(target.y, 1.2, m.gh - 0.3)
 		vel = Kick.lob(from, target, apex, target.y)
 		top = 0.0
 		side = 0.0
 	elif kind == "ground":
 		vel = dir * speed
 	else:
-		vel = Kick.aimed(from, target, speed, top, side)
+		vel = Kick.aimed(from, target, speed, top, side * comp)
 	b.kick(self, vel, "shot", side, top)
 	if sid != "":
 		b.special_id = sid
@@ -723,6 +875,8 @@ func _kick_shot(kind: String, charge: float, opts: Dictionary) -> void:
 		b.set_trail(true, sd["color"])
 		if sid == "disparo_directo":
 			b.knuckle = 0.25
+		elif sid == "tiro_fantasma":
+			b.knuckle = 0.7
 		FX.shake(0.6)
 		FX.burst(from, sd["color"], 40, 9.0)
 		FX.ring(from, sd["color"], 4.0)
@@ -746,11 +900,23 @@ func do_tackle() -> void:
 func do_slide() -> void:
 	if not can_act() or has_ball():
 		return
-	_face_ball_if_near(7.0)
+	_face_ball_if_near(8.0)
 	_set_state(State.SLIDE, 0.85)
 	tackle_done = false
 	spend_stamina(10.0)
-	velocity = facing * maxf(speed_h() + 2.0, 8.5)
+	velocity = facing * maxf(speed_h() + 2.5, 9.0)
+	FX.dust(position, 10)
+
+
+## "Meter el pie": estocada corta que suelta el balón (no lo roba).
+func do_poke() -> void:
+	if not can_act() or has_ball():
+		return
+	_face_ball_if_near(3.0)
+	_set_state(State.POKE, 0.28)
+	tackle_done = false
+	spend_stamina(3.0)
+	velocity *= 0.6
 
 
 func do_shoulder() -> void:
@@ -767,6 +933,16 @@ func _face_ball_if_near(r: float) -> void:
 	var to := flat_to(m.ball.position)
 	if to.length() < r and to.length() > 0.05:
 		facing = to.normalized()
+
+
+func _won_ball_fx(text: String) -> void:
+	gain_energy(SkillDB.GAIN["tackle"])
+	m.stats["tackles"] += 1
+	m.notify("%s de %s" % [text.capitalize(), player_name], team.color.lightened(0.3))
+	FX.popup(position, text, team.color.lightened(0.45))
+	FX.burst(m.ball.position + Vector3.UP * 0.3, Color(1, 1, 1), 18, 5.0, 0.4)
+	FX.ring(position, team.color.lightened(0.3), 2.5, 0.35)
+	FX.hitstop(0.07)
 
 
 func _tackle_contact(reach: float, slide: bool) -> void:
@@ -786,9 +962,12 @@ func _tackle_contact(reach: float, slide: bool) -> void:
 	tackle_done = true
 	if c == null:
 		b.kick(self, facing * (9.0 if slide else 6.5) + Vector3.UP * 1.2, "tackle")
+		if slide:
+			FX.popup(position, "¡BARRIDA!", Color(1.0, 0.85, 0.4), 0.8)
 		return
 	if c.is_evading():
 		m.notify("¡%s lo esquiva!" % c.player_name, c.team.color.lightened(0.3))
+		FX.popup(c.position, "¡ESQUIVA!", c.team.color.lightened(0.5), 0.8)
 		c.gain_energy(10.0)
 		return
 	var p := 0.48 + (st("tackle") - c.st("dribble")) * 0.6 + (st("strength") - c.st("strength")) * 0.15
@@ -804,19 +983,86 @@ func _tackle_contact(reach: float, slide: bool) -> void:
 		if behind and randf() < 0.3:
 			m.foul(self, c)
 			return
-		c.stun(0.6 if slide else 0.35)
+		c.stun(0.9 if slide else 0.6, true)
 		c.dribble_check = {}
 		if not slide and randf() < 0.55:
 			b.set_carrier(self)
 		else:
 			var lat := facing.cross(Vector3.UP) * randf_range(-3.0, 3.0)
 			b.kick(self, facing * 6.0 + lat + Vector3.UP * 0.8, "tackle")
-		gain_energy(SkillDB.GAIN["tackle"])
-		m.stats["tackles"] += 1
-		m.notify("¡Quite de %s!" % player_name, team.color.lightened(0.3))
-		FX.burst(b.position + Vector3.UP * 0.3, Color(1, 1, 1), 14, 4.0, 0.4)
+		_won_ball_fx("¡BARRIDA!" if slide else "¡QUITE!")
 	else:
 		c.gain_energy(6.0)
+		if slide:
+			FX.popup(position, "fallo", Color(0.8, 0.8, 0.8), 0.6)
+
+
+func _poke_contact() -> void:
+	var b := m.ball
+	var c := b.carrier
+	if c == self or (c != null and c.team == team):
+		return
+	if b.position.y - height > 0.6:
+		return
+	var d := Match.flat_dist(b.position, position + facing * 0.5)
+	if d > 1.35 + st("tackle") * 0.2:
+		return
+	tackle_done = true
+	var lat := facing.cross(Vector3.UP) * randf_range(-3.0, 3.0)
+	if c == null:
+		b.kick(self, facing * 5.0 + lat, "tackle")
+		return
+	if c.is_evading():
+		FX.popup(c.position, "¡ESQUIVA!", c.team.color.lightened(0.5), 0.8)
+		c.gain_energy(8.0)
+		return
+	var ball_far := Match.flat_dist(b.position, c.position) > 0.8
+	var p := 0.55 + (st("tackle") - c.st("dribble")) * 0.5 + (0.12 if ball_far else 0.0) - (0.2 if c.want_shield else 0.0)
+	p += m.tackle_bonus(team)
+	if randf() < clampf(p, 0.15, 0.9):
+		b.kick(self, facing * 4.0 + lat + Vector3.UP * 0.4, "tackle")
+		c.stun(0.25, false)
+		c.dribble_check = {}
+		gain_energy(SkillDB.GAIN["poke"])
+		m.stats["tackles"] += 1
+		FX.popup(position, "¡LE METE EL PIE!", team.color.lightened(0.45), 0.85)
+		FX.burst(b.position + Vector3.UP * 0.2, Color(1, 1, 1), 12, 4.0, 0.35)
+		FX.hitstop(0.05)
+
+
+## Agarrar con el brazo (mantener Cuadrado al lado o detrás del rival): lo
+## frena y lo cansa; tras un rato gana el más fuerte. Si te pasas, es falta.
+func _arm_hold(dt: float) -> void:
+	var c := m.ball.carrier
+	if not want_arm or has_ball() or c == null or c.team == team or Match.flat_dist(c.position, position) > 1.7:
+		arm_target = null
+		arm_time = 0.0
+		_arm_resolved = false
+		return
+	arm_target = c
+	arm_time += dt
+	c.grabbed_until = m.time + 0.15
+	c.spend_stamina(4.0 * dt)
+	spend_stamina(2.0 * dt)
+	has_look = true
+	look_target = c.position
+	if arm_time > 0.7 and not _arm_resolved:
+		_arm_resolved = true
+		var mine := st("strength") + stamina / 250.0 + randf() * 0.4
+		var theirs := c.st("strength") + c.stamina / 250.0 + randf() * 0.4 + (0.15 if c.want_shield else 0.0)
+		if mine > theirs:
+			m.ball.kick(self, c.velocity * 0.6 + flat_to(c.position).normalized() * -1.5, "tackle")
+			c.stun(0.5, false)
+			gain_energy(SkillDB.GAIN["poke"])
+			m.stats["tackles"] += 1
+			FX.popup(position, "¡FORCEJEO GANADO!", team.color.lightened(0.45), 0.8)
+			FX.hitstop(0.05)
+		else:
+			c.gain_energy(8.0)
+			FX.popup(c.position, "¡AGUANTA!", c.team.color.lightened(0.45), 0.7)
+	if arm_time > 1.6:
+		arm_time = 0.0
+		m.foul(self, c)
 
 
 func _shoulder_contact() -> void:
@@ -831,22 +1077,28 @@ func _shoulder_contact() -> void:
 	var theirs := c.st("strength") + c.stamina / 250.0 + randf() * 0.35 + (0.2 if c.want_shield else 0.0)
 	if mine > theirs:
 		var v := c.velocity * 0.6 + facing * 2.5
-		c.stun(0.45)
+		c.stun(0.6, true)
 		b.kick(self, v, "tackle")
 		gain_energy(18.0)
-		m.notify("¡%s gana el choque!" % player_name, team.color.lightened(0.3))
 		m.stats["tackles"] += 1
+		FX.popup(position, "¡CHOQUE!", team.color.lightened(0.45), 0.85)
+		FX.hitstop(0.06)
+		FX.shake(0.3)
 	else:
-		stun(0.4)
+		stun(0.45, false)
 		c.gain_energy(8.0)
+		FX.popup(c.position, "¡AGUANTA!", c.team.color.lightened(0.45), 0.7)
 
 
-func stun(t: float) -> void:
+## `fall`: el jugador cae al suelo (queda claro que perdió el duelo).
+func stun(t: float, fall := false) -> void:
 	charge_kind = ""
 	pending = {}
+	arm_target = null
 	if has_ball():
 		m.ball.kick(self, velocity * 0.5, "drop")
-	_set_state(State.STUN, t)
+	fallen = fall
+	_set_state(State.STUN, t + (0.3 if fall else 0.0))
 
 
 func jump() -> void:
@@ -902,9 +1154,10 @@ func _dive_smother() -> void:
 		tackle_done = true
 		if c.is_evading() or randf() > 0.5:
 			return
-		c.stun(0.4)
+		c.stun(0.5, true)
 		m.ball.set_carrier(self)
-		m.notify("¡El portero se lanza a los pies!", team.color.lightened(0.3))
+		FX.popup(position, "¡A LOS PIES!", team.color.lightened(0.5), 0.85)
+		FX.hitstop(0.06)
 
 
 # ---------------------------------------------------------------- regates
@@ -966,6 +1219,8 @@ func _start_skill(dir: Vector3, dist: float, dur: float, evade: float, ball_dir:
 	skill_ball_dir = ball_dir
 	evade_until = m.time + evade
 	_set_state(State.SKILL, dur)
+	if has_ball():
+		m.ball.force_touch()
 
 
 func _dribble_reward() -> void:
@@ -976,6 +1231,7 @@ func _dribble_reward() -> void:
 		gain_energy(SkillDB.GAIN["dribble"])
 		m.stats["dribbles"] += 1
 		m.notify("¡Regate de %s!" % player_name, team.color.lightened(0.4))
+		FX.popup(position, "¡REGATE!", team.color.lightened(0.5), 0.75)
 
 
 # ---------------------------------------------------------------- especiales
@@ -992,27 +1248,25 @@ func try_special(sid: String) -> bool:
 	if state != State.NORMAL:
 		return false
 	var ok := false
+	var dir := aim_dir if aim_active else facing
 	match sd["kind"]:
 		"pass":
 			if has_ball() and not restart_lock:
-				var t := team.find_pass_target(self, aim_dir, false)
-				if t != null:
-					perform("pass", 1.0, {"special": sid, "target": t, "windup": 0.18})
-					ok = true
+				ok = _special_pass(sid, dir)
 		"shot":
 			if has_ball() and (not restart_lock or restart_kind == "penalty" or restart_kind == "free_kick"):
-				perform("shot", 1.0, {"special": sid, "windup": 0.22})
+				perform("curve" if sid == "curva_del_ego" else "shot", 1.0, {"special": sid, "windup": 0.22})
 				ok = true
 		"dribble":
 			if has_ball() and not restart_lock:
-				phantom_until = m.time + 1.3
-				evade_until = phantom_until
-				burst_until = phantom_until
-				phantom_hit = {}
-				ok = true
+				ok = _special_dribble(sid, dir)
 		"tackle":
 			if not has_ball():
-				ok = _start_special_dash()
+				if sid == "muro_de_acero":
+					wall_until = m.time + 3.0
+					ok = true
+				else:
+					ok = _start_special_dash()
 		"awaken":
 			ok = activate_awakening()
 	if ok:
@@ -1022,6 +1276,85 @@ func try_special(sid: String) -> bool:
 	elif is_human and sd["kind"] != "awaken":
 		m.notify("No se puede usar ahora", Color(0.7, 0.7, 0.75))
 	return ok
+
+
+func _special_pass(sid: String, dir: Vector3) -> bool:
+	match sid:
+		"pase_meteoro":
+			var t := team.nearest_in_direction(self, dir)
+			if t == null:
+				return false
+			perform("pass", 1.0, {"special": sid, "target": t, "windup": 0.18})
+		"pase_bumeran":
+			var t2 := team.nearest_in_direction(self, dir)
+			if t2 == null:
+				return false
+			# Sale abierto hacia el lado con menos rivales y se cierra al compañero
+			var to := flat_to(t2.position).normalized()
+			var left := to.rotated(Vector3.UP, deg_to_rad(28.0))
+			var right := to.rotated(Vector3.UP, deg_to_rad(-28.0))
+			var hint := left if _crowd(left) < _crowd(right) else right
+			perform("pass", 0.7, {"special": sid, "target": t2, "hint": hint, "windup": 0.18})
+		"centro_teledirigido":
+			var t3 := team.through_target(self, dir)
+			if t3 == null:
+				t3 = team.nearest_in_direction(self, dir)
+			if t3 == null:
+				return false
+			perform("cross", 0.8, {"special": sid, "target": t3, "windup": 0.2})
+		_:
+			return false
+	return true
+
+
+func _crowd(dir: Vector3) -> float:
+	var c := 0.0
+	for o in team.opponent.players:
+		var rel := flat_to(o.position)
+		var d := rel.length()
+		if d < 20.0 and d > 0.1:
+			c += maxf(rel.normalized().dot(dir), 0.0) / d
+	return c
+
+
+func _special_dribble(sid: String, dir: Vector3) -> bool:
+	var sd := SkillDB.special(sid)
+	match sid:
+		"regate_fantasma":
+			phantom_until = m.time + 1.3
+			evade_until = phantom_until
+			burst_until = phantom_until
+			phantom_hit = {}
+		"regate_relampago":
+			var d := dir
+			if not aim_active:
+				var o := nearest_opponent()
+				var side := facing.cross(Vector3.UP)
+				if o != null and side.dot(flat_to(o.position)) > 0.0:
+					side = -side
+				d = (facing * 0.5 + side).normalized()
+			_start_skill(d, 4.5, 0.2, 0.55, d)
+			skill["ghost"] = true
+			skill["color"] = sd["color"]
+		"sombrero_celestial":
+			var b := m.ball
+			var tgt := m.clamp_in_field(position + facing * 7.0, 1.0)
+			b.kick(self, Kick.lob(b.position, tgt, 3.2, Ball.RADIUS), "knock")
+			b.shield_team = team_id
+			b.set_trail(true, sd["color"])
+			no_touch_until = m.time + 0.45
+			evade_until = m.time + 1.1
+			burst_until = m.time + 1.3
+		"torbellino":
+			_start_skill(facing, 1.5, 0.55, 0.65, facing)
+			skill["spin"] = true
+			for o in team.opponent.players:
+				if o.role != Role.GK and Match.flat_dist(o.position, position) < 2.8:
+					o.stun(0.9, true)
+			FX.ring(position, sd["color"], 3.5, 0.5)
+		_:
+			return false
+	return true
 
 
 func _start_special_dash() -> bool:
@@ -1055,18 +1388,19 @@ func _dash_tick(dt: float) -> void:
 		if c != null and c.team != team:
 			if m.time < c.phantom_until:
 				m.notify("¡%s es intocable!" % c.player_name, c.team.color.lightened(0.3))
-				stun(0.5)
+				FX.popup(c.position, "¡INTOCABLE!", c.team.color.lightened(0.5), 0.9)
+				stun(0.5, true)
 				return
-			c.stun(0.7)
+			c.stun(0.8, true)
 			b.set_carrier(self)
-			gain_energy(10.0)
-			m.stats["tackles"] += 1
+			_won_ball_fx("¡ROBO!")
 		elif c == null:
 			if b.shield_team >= 0 and b.shield_team != team_id and randf() < 0.5:
 				m.notify("¡El pase es demasiado rápido!", Color(0.8, 0.8, 0.9))
 			else:
-				b.set_carrier(self)
+				b.set_carrier(self, true)
 				m.stats["interceptions"] += 1
+				FX.popup(position, "¡CORTADO!", team.color.lightened(0.5))
 		FX.burst(b.position + Vector3.UP * 0.4, Color(1.0, 0.9, 0.3), 30, 7.0)
 		velocity = facing * 3.0
 		_set_state(State.NORMAL)
@@ -1080,6 +1414,9 @@ func _dash_tick(dt: float) -> void:
 
 
 func _phantom_tick(dt: float) -> void:
+	_wall_fx.visible = m.time < wall_until
+	if _wall_fx.visible:
+		_wall_mat.albedo_color.a = 0.18 + sin(m.time * 12.0) * 0.06
 	if m.time >= phantom_until:
 		return
 	_ghost_t -= dt
@@ -1092,43 +1429,82 @@ func _phantom_tick(dt: float) -> void:
 		if Match.flat_dist(o.position, position) < 1.8:
 			phantom_hit[o] = true
 			if randf() < 0.6:
-				o.stun(0.8)
+				o.stun(0.8, true)
 				m.notify("¡Tobillos rotos!", Color(0.8, 0.55, 1.0))
+				FX.popup(o.position, "¡TOBILLOS ROTOS!", Color(0.85, 0.6, 1.0), 0.75)
 
 
 # ---------------------------------------------------------------- visual
 
 func _build_visual() -> void:
-	var shirt := team.gk_color if role == Role.GK else team.color
-	var skin: Color = GameConfig.profile["skin"] if is_human and team.id == 0 else Color(0.85, 0.68, 0.52).lerp(Color(0.45, 0.3, 0.2), randf() * 0.7)
-	var hair: Color = GameConfig.profile["hair"] if is_human and team.id == 0 else Color(0.1, 0.08, 0.06).lerp(Color(0.85, 0.75, 0.4), randf() * randf())
-	_shirt_mat = _mat(shirt)
-	var shorts_mat := _mat(team.color2)
+	var gk := role == Role.GK
+	var shirt := team.gk_color if gk else team.color
+	var mine := is_human and team.id == 0
+	var skin: Color = GameConfig.profile["skin"] if mine else Color(0.88, 0.7, 0.55).lerp(Color(0.42, 0.28, 0.18), randf() * 0.7)
+	var hair: Color = GameConfig.profile["hair"] if mine else Color(0.1, 0.08, 0.06).lerp(Color(0.85, 0.75, 0.4), randf() * randf())
+	var shirt_mat := _mat(shirt)
+	var trim_mat := _mat(shirt.darkened(0.35))
+	var shorts_mat := _mat(team.color2 if not gk else Color(0.12, 0.12, 0.14))
 	var skin_mat := _mat(skin)
-	var sock_mat := _mat(shirt.darkened(0.3))
+	var sock_mat := _mat(shirt.darkened(0.25) if not gk else Color(0.15, 0.15, 0.15))
+	var boot_mat := _mat(Color(0.08, 0.08, 0.1))
+	var glove_mat := _mat(Color(0.97, 0.97, 0.97))
 
-	_body = Node3D.new()
-	add_child(_body)
-	var torso := _mesh_child(_body, _capsule(0.26, 0.85), _shirt_mat, Vector3(0, 1.22, 0))
-	torso.scale = Vector3(1.0, 1.0, 0.75)
-	_mesh_child(_body, _cyl(0.25, 0.28), shorts_mat, Vector3(0, 0.78, 0))
-	_mesh_child(_body, _sphere(0.14), skin_mat, Vector3(0, 1.78, 0))
-	var hair_mi := _mesh_child(_body, _sphere(0.15), _mat(hair), Vector3(0, 1.84, 0.02))
-	hair_mi.scale = Vector3(1.0, 0.7, 1.0)
+	_root = Node3D.new()
+	add_child(_root)
+	_pelvis = Node3D.new()
+	_pelvis.position.y = HIP_Y
+	_root.add_child(_pelvis)
+	var shorts := _mesh_child(_pelvis, _cyl(0.2, 0.26), shorts_mat, Vector3(0, 0.02, 0))
+	shorts.scale = Vector3(1.0, 1.0, 0.8)
 
-	_leg_l = _limb(_body, Vector3(-0.12, 0.72, 0), 0.62, sock_mat, 0.075)
-	_leg_r = _limb(_body, Vector3(0.12, 0.72, 0), 0.62, sock_mat, 0.075)
-	_arm_l = _limb(_body, Vector3(-0.33, 1.52, 0), 0.55, skin_mat, 0.055)
-	_arm_r = _limb(_body, Vector3(0.33, 1.52, 0), 0.55, skin_mat, 0.055)
+	_torso = Node3D.new()
+	_torso.position.y = 0.1
+	_pelvis.add_child(_torso)
+	var chest := _mesh_child(_torso, _capsule(0.235, 0.66), shirt_mat, Vector3(0, 0.32, 0))
+	chest.scale = Vector3(1.0, 1.0, 0.7)
+	_mesh_child(_torso, _cyl(0.055, 0.1), skin_mat, Vector3(0, 0.68, 0))
+	_head = Node3D.new()
+	_head.position.y = 0.72
+	_torso.add_child(_head)
+	_mesh_child(_head, _sphere(0.125), skin_mat, Vector3(0, 0.12, 0))
+	var hair_mi := _mesh_child(_head, _sphere(0.135), _mat(hair), Vector3(0, 0.17, 0.02))
+	hair_mi.scale = Vector3(1.0, 0.72, 1.05)
+
+	_arm_l = _joint(_torso, Vector3(-0.29, 0.58, 0))
+	_mesh_child(_arm_l, _cyl(0.058, 0.3), shirt_mat, Vector3(0, -0.15, 0))
+	_elbow_l = _joint(_arm_l, Vector3(0, -0.3, 0))
+	_mesh_child(_elbow_l, _cyl(0.048, 0.26), skin_mat, Vector3(0, -0.13, 0))
+	_mesh_child(_elbow_l, _sphere(0.085 if gk else 0.052), glove_mat if gk else skin_mat, Vector3(0, -0.29, 0))
+	_arm_r = _joint(_torso, Vector3(0.29, 0.58, 0))
+	_mesh_child(_arm_r, _cyl(0.058, 0.3), shirt_mat, Vector3(0, -0.15, 0))
+	_elbow_r = _joint(_arm_r, Vector3(0, -0.3, 0))
+	_mesh_child(_elbow_r, _cyl(0.048, 0.26), skin_mat, Vector3(0, -0.13, 0))
+	_mesh_child(_elbow_r, _sphere(0.085 if gk else 0.052), glove_mat if gk else skin_mat, Vector3(0, -0.29, 0))
+
+	_thigh_l = _joint(_pelvis, Vector3(-0.11, -0.04, 0))
+	_mesh_child(_thigh_l, _cyl(0.085, 0.45), skin_mat, Vector3(0, -0.225, 0))
+	_knee_l = _joint(_thigh_l, Vector3(0, -0.45, 0))
+	_mesh_child(_knee_l, _cyl(0.07, 0.42), sock_mat, Vector3(0, -0.21, 0))
+	_mesh_child(_knee_l, _box(Vector3(0.1, 0.07, 0.25)), boot_mat, Vector3(0, -0.41, -0.06))
+	_thigh_r = _joint(_pelvis, Vector3(0.11, -0.04, 0))
+	_mesh_child(_thigh_r, _cyl(0.085, 0.45), skin_mat, Vector3(0, -0.225, 0))
+	_knee_r = _joint(_thigh_r, Vector3(0, -0.45, 0))
+	_mesh_child(_knee_r, _cyl(0.07, 0.42), sock_mat, Vector3(0, -0.21, 0))
+	_mesh_child(_knee_r, _box(Vector3(0.1, 0.07, 0.25)), boot_mat, Vector3(0, -0.41, -0.06))
+
+	# Franja del uniforme para dar lectura de equipo desde lejos
+	var band := _mesh_child(_torso, _cyl(0.24, 0.07), trim_mat, Vector3(0, 0.5, 0))
+	band.scale = Vector3(1.0, 1.0, 0.72)
 
 	var num := Label3D.new()
 	num.text = str(number)
 	num.font_size = 72
-	num.pixel_size = 0.004
+	num.pixel_size = 0.0042
 	num.outline_size = 8
-	num.modulate = team.color2 if role != Role.GK else Color(0.1, 0.1, 0.1)
-	num.position = Vector3(0, 1.28, 0.21)
-	_body.add_child(num)
+	num.modulate = team.color2 if not gk else Color(0.1, 0.1, 0.1)
+	num.position = Vector3(0, 0.33, 0.175)
+	_torso.add_child(num)
 
 	var shadow := MeshInstance3D.new()
 	var pm := PlaneMesh.new()
@@ -1171,12 +1547,7 @@ func _build_visual() -> void:
 	add_child(_aura)
 	var aura_mi := MeshInstance3D.new()
 	aura_mi.mesh = _capsule(0.62, 2.3)
-	_aura_mat = StandardMaterial3D.new()
-	_aura_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	_aura_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	_aura_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
-	_aura_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	_aura_mat.albedo_color = Color(0.3, 0.6, 1.0, 0.2)
+	_aura_mat = _fx_mat(Color(0.3, 0.6, 1.0, 0.2))
 	aura_mi.material_override = _aura_mat
 	aura_mi.position.y = 1.0
 	aura_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -1211,6 +1582,17 @@ func _build_visual() -> void:
 	_aura_particles.emitting = false
 	_aura.add_child(_aura_particles)
 	_aura.visible = false
+
+	_wall_fx = MeshInstance3D.new()
+	_wall_fx.mesh = _sphere(2.2)
+	_wall_mat = _fx_mat(Color(0.7, 0.82, 1.0, 0.2))
+	_wall_fx.material_override = _wall_mat
+	_wall_fx.position.y = 0.6
+	_wall_fx.scale = Vector3(1.0, 0.6, 1.0)
+	_wall_fx.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_wall_fx.set_meta("no_ghost", true)
+	_wall_fx.visible = false
+	add_child(_wall_fx)
 	set_human(is_human)
 
 
@@ -1221,50 +1603,208 @@ func set_human(h: bool) -> void:
 		_arrow.visible = h
 
 
+## Animación procedural: se calcula una pose objetivo según el estado y se
+## interpola suavemente hacia ella (sin saltos bruscos entre poses).
 func _animate(dt: float) -> void:
-	rotation.y = atan2(-facing.x, -facing.z)
+	_kick_anim = maxf(_kick_anim - dt, 0.0)
+	_touch_anim = maxf(_touch_anim - dt, 0.0)
+	_receive_anim = maxf(_receive_anim - dt, 0.0)
 	var spd := speed_h()
-	_anim_phase += dt * (spd * 1.9 + 0.5)
-	var amp := clampf(spd / 8.0, 0.0, 1.0) * 0.9
-	var swing := sin(_anim_phase) * amp
-	_leg_l.rotation.x = swing
-	_leg_r.rotation.x = -swing
-	_arm_l.rotation.x = -swing * 0.8
-	_arm_r.rotation.x = swing * 0.8
-	_arm_l.rotation.z = 0.0
-	_arm_r.rotation.z = 0.0
-	_body.rotation = Vector3(-clampf(spd / 9.0, 0.0, 1.0) * 0.2, 0.0, 0.0)
-	_body.position = Vector3.ZERO
-	if _kick_anim > 0.0:
-		_kick_anim -= dt
-		var k := 1.0 - _kick_anim / 0.3
-		_leg_r.rotation.x = lerpf(-0.9, 1.3, clampf(k * 1.6, 0.0, 1.0))
-	elif state == State.KICK:
-		_leg_r.rotation.x = -0.9
+	var k := clampf(spd / 8.5, 0.0, 1.0)
+	var moving := clampf(spd / 1.2, 0.0, 1.0)
+	if spd > 0.3:
+		_anim_phase += dt * (7.0 + spd * 1.3)
+	var s := sin(_anim_phase)
+	var c := cos(_anim_phase)
+	var amp := (0.3 + 0.65 * k) * moving
+	var t := {
+		"root_x": 0.0, "root_z": 0.0, "root_y": 0.0,
+		"pelvis_y": HIP_Y - 0.05 * k * absf(c),
+		"torso_x": -0.06 - 0.24 * k, "torso_z": 0.0, "torso_y": 0.18 * amp * s, "head_x": 0.08 * k,
+		"thigh_l": amp * s, "thigh_l_z": 0.0, "knee_l": 0.12 + (0.35 + 1.0 * k) * maxf(0.0, c) * moving,
+		"thigh_r": -amp * s, "thigh_r_z": 0.0, "knee_r": 0.12 + (0.35 + 1.0 * k) * maxf(0.0, -c) * moving,
+		"arm_l": -0.8 * amp * s, "arm_l_z": 0.12, "elbow_l": 0.35 + 0.9 * k,
+		"arm_r": 0.8 * amp * s, "arm_r_z": 0.12, "elbow_r": 0.35 + 0.9 * k,
+	}
+	if spd < 0.3:
+		t["torso_x"] = -0.02 + sin(m.time * 2.2 + number) * 0.025
+	# Inclinarse hacia el lado del giro
+	t["root_z"] = clampf(_turn_rate * spd * 0.012, -0.28, 0.28)
+	var rate := 18.0
+	var gk := role == Role.GK
+
+	# Posturas de contexto
+	if state == State.NORMAL:
+		if want_mark and not has_ball():
+			t["pelvis_y"] = HIP_Y - 0.14
+			t["thigh_l"] = float(t["thigh_l"]) * 0.4 + 0.45
+			t["thigh_r"] = float(t["thigh_r"]) * 0.4 + 0.45
+			t["knee_l"] = 0.85
+			t["knee_r"] = 0.85
+			t["torso_x"] = -0.1
+			t["arm_l_z"] = 0.55
+			t["arm_r_z"] = 0.55
+		if want_shield and has_ball():
+			t["torso_x"] = 0.12
+			t["arm_l_z"] = 1.1
+			t["arm_r_z"] = 0.7
+			t["pelvis_y"] = HIP_Y - 0.07
+		if arm_target != null:
+			var side_sign := signf(facing.cross(flat_to(arm_target.position)).y)
+			t["arm_r"] = 1.45
+			t["elbow_r"] = 0.15
+			t["arm_r_z"] = 0.3
+			t["torso_z"] = 0.25 * side_sign
+		if gk and not has_ball() and spd < 2.0:
+			t["pelvis_y"] = HIP_Y - 0.12
+			t["knee_l"] = 0.55
+			t["knee_r"] = 0.55
+			t["thigh_l"] = 0.3
+			t["thigh_r"] = 0.3
+			t["arm_l_z"] = 0.6
+			t["arm_r_z"] = 0.6
+			t["elbow_l"] = 0.7
+			t["elbow_r"] = 0.7
+		if has_ball() and gk and m.in_box(team, position):
+			t["arm_l"] = 1.2
+			t["arm_r"] = 1.2
+			t["elbow_l"] = 0.9
+			t["elbow_r"] = 0.9
+	if height > 0.05:
+		t["knee_l"] = 0.9
+		t["knee_r"] = 0.6
+		t["thigh_l"] = 0.5
+		t["arm_l"] = -0.4
+		t["arm_r"] = -0.4
+		t["arm_l_z"] = 0.6
+		t["arm_r_z"] = 0.6
+	# Toques de conducción y recepción
+	if _touch_anim > 0.0 and state == State.NORMAL:
+		var tp := sin((1.0 - _touch_anim / 0.16) * PI)
+		var leg := "thigh_r" if _touch_leg > 0.0 else "thigh_l"
+		t[leg] = float(t[leg]) * 0.5 + 0.55 * tp
+	if _receive_anim > 0.0 and state == State.NORMAL:
+		var rp := sin((1.0 - _receive_anim / 0.28) * PI)
+		t["thigh_r"] = 0.7 * rp
+		t["knee_r"] = 0.5 * rp
+		t["torso_x"] = -0.15
+		t["arm_l_z"] = 0.5
 	match state:
+		State.KICK:
+			rate = 30.0
+			var is_pass := PASS_KINDS.has(String(pending.get("kind", "")))
+			if not pending.get("done", true):
+				# Armado: pierna atrás, cuerpo hacia atrás, brazo opuesto abierto
+				t["thigh_r"] = -0.45 if is_pass else -0.8
+				t["knee_r"] = 0.9 if is_pass else 1.4
+				t["thigh_l"] = 0.12
+				t["knee_l"] = 0.3
+				t["torso_x"] = 0.14
+				t["arm_l"] = 0.5
+				t["arm_l_z"] = 0.8
+				t["arm_r_z"] = 0.4
+	if _kick_anim > 0.0:
+		rate = 40.0
+		var p := 1.0 - _kick_anim / 0.3
+		if _kick_was_header:
+			t["torso_x"] = -0.7 * sin(p * PI)
+			t["head_x"] = -0.5 * sin(p * PI)
+		else:
+			t["thigh_r"] = lerpf(-0.8, 1.45, clampf(p * 2.5, 0.0, 1.0))
+			t["knee_r"] = lerpf(1.4, 0.05, clampf(p * 3.0, 0.0, 1.0))
+			t["thigh_l"] = 0.1
+			t["knee_l"] = 0.25
+			t["torso_x"] = lerpf(0.14, -0.18, p)
+			t["arm_l"] = 0.8
+			t["arm_l_z"] = 0.7
+			t["arm_r"] = -0.5
+	match state:
+		State.TACKLE, State.POKE:
+			rate = 30.0
+			t["thigh_r"] = 1.3 if state == State.TACKLE else 1.0
+			t["knee_r"] = 0.1
+			t["thigh_r_z"] = 0.25
+			t["thigh_l"] = -0.35
+			t["knee_l"] = 0.8
+			t["pelvis_y"] = HIP_Y - (0.2 if state == State.TACKLE else 0.12)
+			t["torso_x"] = -0.35
+			t["arm_l_z"] = 0.8
+			t["arm_r_z"] = 0.5
+		State.SHOULDER:
+			t["torso_z"] = -0.4
+			t["pelvis_y"] = HIP_Y - 0.08
+			t["arm_l"] = -0.3
+			t["arm_l_z"] = 0.25
 		State.SLIDE:
-			_body.rotation.x = 1.15
-			_body.position.y = -0.55
-			_leg_l.rotation.x = 1.4
-			_leg_r.rotation.x = 1.2
+			rate = 25.0
+			# Tumbado hacia atrás con la pierna de ataque estirada
+			t["root_x"] = 1.2
+			t["thigh_r"] = 0.35
+			t["knee_r"] = 0.0
+			t["thigh_l"] = 0.9
+			t["knee_l"] = 1.6
+			t["torso_x"] = -0.25
+			t["arm_l"] = -0.9
+			t["arm_r"] = -0.9
+			t["arm_l_z"] = 0.6
+			t["arm_r_z"] = 0.6
+			t["torso_y"] = 0.0
 		State.STUN:
-			_body.rotation.z = sin(state_time * 14.0) * 0.35
+			if fallen:
+				var lie := 1.45
+				var up_t := state_dur - 0.35
+				var f := clampf(state_time / 0.22, 0.0, 1.0)
+				if state_time > up_t:
+					f = clampf(1.0 - (state_time - up_t) / 0.35, 0.0, 1.0)
+				t["root_x"] = lie * f
+				t["thigh_l"] = 0.6 * f
+				t["thigh_r"] = 0.2 * f
+				t["knee_l"] = 0.9 * f
+				t["arm_l_z"] = 1.3 * f
+				t["arm_r_z"] = 1.0 * f
+				t["torso_y"] = 0.0
+				rate = 22.0
+			else:
+				t["torso_z"] = sin(state_time * 16.0) * 0.35
+				t["arm_l_z"] = 0.9
+				t["arm_r_z"] = 0.9
+				t["torso_x"] = 0.15
 		State.DIVE:
-			_body.rotation.z = -dive_side * clampf(state_time * 6.0, 0.0, 1.35)
-			_arm_l.rotation.z = -2.6
-			_arm_r.rotation.z = 2.6
-		State.TACKLE, State.SHOULDER:
-			_body.rotation.x = -0.35
-			_leg_r.rotation.x = 1.0
+			rate = 26.0
+			t["root_z"] = dive_side * clampf(state_time * 6.0, 0.0, 1.35)
+			t["arm_l_z"] = 2.8
+			t["arm_r_z"] = 2.8
+			t["elbow_l"] = 0.05
+			t["elbow_r"] = 0.05
+			t["arm_l"] = 0.0
+			t["arm_r"] = 0.0
+			t["thigh_l"] = 0.0
+			t["thigh_r"] = 0.2
+			t["knee_l"] = 0.1
+			t["knee_r"] = 0.3
+			t["torso_y"] = 0.0
+		State.DASH:
+			t["torso_x"] = -0.55
+			t["arm_l"] = -1.0
+			t["arm_r"] = -1.0
 		State.SKILL:
-			if skill.get("spin", false):
-				_body.rotation.y = state_time / maxf(state_dur, 0.01) * TAU
+			var sd: Vector3 = skill.get("dir", facing)
+			var side_sign2 := signf(facing.cross(sd).y)
+			t["torso_z"] = 0.3 * side_sign2
+			t["thigh_r_z"] = -0.5 * side_sign2
+			t["thigh_r"] = 0.4
+			t["arm_l_z"] = 0.7
+			t["arm_r_z"] = 0.7
 		State.CELEBRATE:
-			_arm_l.rotation.z = -2.7
-			_arm_r.rotation.z = 2.7
-	if m.ball.carrier == self and role == Role.GK and state == State.NORMAL:
-		_arm_l.rotation.x = -1.4
-		_arm_r.rotation.x = -1.4
+			t["arm_l_z"] = 2.6 + sin(m.time * 10.0) * 0.2
+			t["arm_r_z"] = 2.6 - sin(m.time * 10.0) * 0.2
+			t["elbow_l"] = 0.2
+			t["elbow_r"] = 0.2
+	_spin = 0.0
+	if state == State.SKILL and skill.get("spin", false):
+		_spin = state_time / maxf(state_dur, 0.01) * TAU
+	_apply_pose(t, rate, dt)
+	rotation.y = atan2(-facing.x, -facing.z) + _spin
 	if is_human:
 		_arrow.position.y = 2.45 + sin(m.time * 5.0) * 0.08
 		_ring.rotation.y += dt * 2.0
@@ -1272,10 +1812,39 @@ func _animate(dt: float) -> void:
 		_aura.scale = Vector3.ONE * (1.0 + sin(m.time * 9.0) * 0.06)
 
 
+func _apply_pose(t: Dictionary, rate: float, dt: float) -> void:
+	var w := 1.0 - exp(-rate * dt)
+	for key in t:
+		_pose[key] = lerpf(float(_pose.get(key, t[key])), float(t[key]), w)
+	_root.rotation = Vector3(_pose["root_x"], 0.0, _pose["root_z"])
+	_root.position.y = _pose["root_y"]
+	_pelvis.position.y = _pose["pelvis_y"]
+	_torso.rotation = Vector3(_pose["torso_x"], _pose["torso_y"], _pose["torso_z"])
+	_head.rotation.x = _pose["head_x"]
+	_thigh_l.rotation = Vector3(_pose["thigh_l"], 0.0, -float(_pose["thigh_l_z"]))
+	_knee_l.rotation.x = -float(_pose["knee_l"])
+	_thigh_r.rotation = Vector3(_pose["thigh_r"], 0.0, float(_pose["thigh_r_z"]))
+	_knee_r.rotation.x = -float(_pose["knee_r"])
+	_arm_l.rotation = Vector3(_pose["arm_l"], 0.0, -float(_pose["arm_l_z"]))
+	_elbow_l.rotation.x = _pose["elbow_l"]
+	_arm_r.rotation = Vector3(_pose["arm_r"], 0.0, float(_pose["arm_r_z"]))
+	_elbow_r.rotation.x = _pose["elbow_r"]
+
+
 func _mat(c: Color) -> StandardMaterial3D:
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = c
 	mat.roughness = 0.75
+	return mat
+
+
+func _fx_mat(c: Color) -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.albedo_color = c
 	return mat
 
 
@@ -1291,9 +1860,9 @@ func _capsule(r: float, h: float) -> CapsuleMesh:
 func _cyl(r: float, h: float) -> CylinderMesh:
 	var c := CylinderMesh.new()
 	c.top_radius = r
-	c.bottom_radius = r * 0.95
+	c.bottom_radius = r * 0.9
 	c.height = h
-	c.radial_segments = 12
+	c.radial_segments = 10
 	return c
 
 
@@ -1306,6 +1875,12 @@ func _sphere(r: float) -> SphereMesh:
 	return s
 
 
+func _box(size: Vector3) -> BoxMesh:
+	var b := BoxMesh.new()
+	b.size = size
+	return b
+
+
 func _mesh_child(parent: Node3D, mesh: Mesh, mat: Material, pos: Vector3) -> MeshInstance3D:
 	var mi := MeshInstance3D.new()
 	mi.mesh = mesh
@@ -1315,14 +1890,8 @@ func _mesh_child(parent: Node3D, mesh: Mesh, mat: Material, pos: Vector3) -> Mes
 	return mi
 
 
-func _limb(parent: Node3D, pivot: Vector3, length: float, mat: Material, r: float) -> Node3D:
-	var p := Node3D.new()
-	p.position = pivot
-	parent.add_child(p)
-	var c := CylinderMesh.new()
-	c.top_radius = r
-	c.bottom_radius = r * 0.85
-	c.height = length
-	c.radial_segments = 8
-	_mesh_child(p, c, mat, Vector3(0, -length * 0.5, 0))
-	return p
+func _joint(parent: Node3D, pos: Vector3) -> Node3D:
+	var j := Node3D.new()
+	j.position = pos
+	parent.add_child(j)
+	return j

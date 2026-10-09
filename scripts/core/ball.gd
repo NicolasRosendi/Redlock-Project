@@ -5,17 +5,21 @@ extends Node3D
 ## Cuando un jugador lo controla (carrier) se pega a sus pies.
 
 const RADIUS := 0.11
-const GRAVITY := 9.81
+## Gravedad algo mayor que la real: en cámara de TV el balón real parece flotar.
+const GRAVITY := 11.5
 const AIR_DRAG := 0.05
 const ROLL_DECEL := 2.2
 const ROLL_DRAG := 0.2
-const BOUNCE := 0.55
-const BOUNCE_KEEP := 0.82
+const BOUNCE := 0.5
+const BOUNCE_KEEP := 0.76
 const MAGNUS := 0.25
 const DIP := 0.22
 const SPIN_DECAY := 0.35
 const POST_RADIUS := 0.06
 const TRAIL_COUNT := 18
+const VISUAL_SCALE := 1.3
+## Frenado del balón conducido entre toque y toque.
+const CARRY_DECEL := 6.0
 
 var m: Match
 var velocity := Vector3.ZERO
@@ -38,6 +42,7 @@ var special_id := ""
 var special_break := 0.0
 var in_goal := false
 var tried := {}
+var carry_vel := Vector3.ZERO
 
 var _mesh: MeshInstance3D
 var _shadow: MeshInstance3D
@@ -49,7 +54,7 @@ var _trail_i := 0
 var _trail_t := 0.0
 var _trail_on := false
 var _trail_color := Color.WHITE
-var _carry_phase := 0.0
+var _touch_cd := 0.0
 
 
 func _ready() -> void:
@@ -61,6 +66,9 @@ func _ready() -> void:
 	var mat := ShaderMaterial.new()
 	mat.shader = load("res://shaders/ball.gdshader")
 	_mesh.material_override = mat
+	# Algo más grande que el real para que se lea bien desde lejos
+	_mesh.scale = Vector3.ONE * VISUAL_SCALE
+	_mesh.position.y = RADIUS * (VISUAL_SCALE - 1.0)
 	add_child(_mesh)
 
 	_shadow = MeshInstance3D.new()
@@ -126,10 +134,10 @@ static func integrate(pos: Vector3, vel: Vector3, side: float, top: float, dt: f
 			var ns := maxf(sp - (ROLL_DECEL + ROLL_DRAG * sp) * dt, 0.0)
 			hv *= ns / sp
 			if absf(side) > 0.01 and ns > 1.0:
-				hv += Vector3.UP.cross(hv / ns) * side * ns * MAGNUS * 0.25 * dt
+				hv += Vector3.UP.cross(hv / ns) * side * ns * MAGNUS * 0.7 * dt
 		vel.x = hv.x
 		vel.z = hv.z
-		side *= exp(-SPIN_DECAY * 3.0 * dt)
+		side *= exp(-SPIN_DECAY * 1.5 * dt)
 		top = 0.0
 		pos += vel * dt
 	else:
@@ -210,9 +218,21 @@ func kick(by: Player, vel: Vector3, kind: String, side := 0.0, top := 0.0) -> vo
 	set_trail(vel.length() > 26.0, Color(1, 1, 1, 0.5))
 
 
-func set_carrier(p: Player) -> void:
+## `cushion`: recepción de un balón en movimiento. El primer toque amortigua
+## pero conserva parte de la velocidad, así que el balón no se "pega" al pie.
+func set_carrier(p: Player, cushion := false) -> void:
+	var pv := Vector3(p.velocity.x, 0.0, p.velocity.z)
+	if cushion:
+		var bv := Vector3(velocity.x, 0.0, velocity.z)
+		var keep := clampf(0.14 + maxf(bv.length() - 12.0, 0.0) * 0.015 - p.st("dribble") * 0.08, 0.04, 0.35)
+		carry_vel = pv + (bv - pv) * keep
+		_touch_cd = 0.22
+		p.on_receive()
+	else:
+		carry_vel = pv
+		_touch_cd = 0.0
 	carrier = p
-	velocity = p.velocity
+	velocity = carry_vel
 	side_spin = 0.0
 	top_spin = 0.0
 	knuckle = 0.0
@@ -226,6 +246,13 @@ func set_carrier(p: Player) -> void:
 	tried.clear()
 	set_trail(false)
 	m.on_possession(p)
+
+
+## Obliga a un toque inmediato (al empezar un regate, por ejemplo).
+func force_touch() -> void:
+	_touch_cd = 0.0
+	if carrier != null:
+		_touch(carrier, Vector3(carrier.velocity.x, 0, carrier.velocity.z), carrier.skill_dir_or_facing())
 
 
 func place(pos: Vector3) -> void:
@@ -249,26 +276,69 @@ func set_trail(on: bool, color := Color.WHITE) -> void:
 	_trail_color = color
 
 
-## El balón acompaña los pies del portador. Al esprintar los toques son más
-## largos (más fácil de robar), al proteger se queda pegado.
+## Conducción por toques: el portador empuja el balón, que rueda y frena por
+## su cuenta hasta que el jugador lo alcanza y lo vuelve a tocar. Al esprintar
+## los toques son más largos (más fácil de robar); al proteger, frenar o armar
+## un tiro, el balón se queda al pie. El portero lo lleva en las manos.
 func carry(dt: float) -> void:
 	var p := carrier
-	var hv := Vector3(p.velocity.x, 0.0, p.velocity.z)
-	var spd := hv.length()
-	_carry_phase += dt * (spd * 1.1 + 1.0)
-	var reach := 0.45 + spd * 0.035
+	var pv := Vector3(p.velocity.x, 0.0, p.velocity.z)
+	var spd := pv.length()
+	var fwd := p.skill_dir_or_facing()
+	_touch_cd -= dt
+	if position.y > RADIUS:
+		position.y = maxf(position.y - 4.0 * dt, RADIUS)
+	if p.role == Player.Role.GK and m.in_box(p.team, p.position):
+		var hands := p.position + p.facing * 0.32 + Vector3.UP * 1.05
+		position = position.lerp(hands, 1.0 - exp(-14.0 * dt))
+		carry_vel = pv
+		velocity = carry_vel
+		return
+	var hold := p.state == Player.State.KICK or p.restart_lock or p.want_shield or spd < 0.8
+	if hold:
+		var target := p.position + fwd * 0.42
+		if p.want_shield:
+			var o := p.nearest_opponent()
+			if o != null:
+				var away := p.flat_to(p.position * 2.0 - o.position).normalized()
+				target = p.position + (away * 0.7 + fwd * 0.3).normalized() * 0.5
+		var k := 1.0 - exp(-12.0 * dt)
+		position.x = lerpf(position.x, target.x, k)
+		position.z = lerpf(position.z, target.z, k)
+		carry_vel = pv
+	else:
+		var sp := carry_vel.length()
+		if sp > 0.0:
+			carry_vel *= maxf(sp - (CARRY_DECEL + ROLL_DRAG * sp) * dt, 0.0) / sp
+		position += carry_vel * dt
+		var rel := Vector3(position.x - p.position.x, 0.0, position.z - p.position.z)
+		var right := fwd.cross(Vector3.UP)
+		var along := rel.dot(fwd)
+		var lat := rel.dot(right)
+		if _touch_cd <= 0.0 and (along < 0.4 or absf(lat) > 0.32 or rel.length() > 2.3):
+			_touch(p, pv, fwd)
+	var rel2 := Vector3(position.x - p.position.x, 0.0, position.z - p.position.z)
+	if rel2.length() > 2.6:
+		var fixed := p.position + rel2.normalized() * 2.6
+		position.x = fixed.x
+		position.z = fixed.z
+	velocity = carry_vel
+
+
+func _touch(p: Player, pv: Vector3, fwd: Vector3) -> void:
+	var spd := pv.length()
+	var reach := 0.6 + spd * 0.04
 	if p.want_sprint and spd > 6.0:
-		reach += (0.25 + 0.4 * (0.5 + 0.5 * sin(_carry_phase))) * (1.1 - p.st("dribble") * 0.6)
-	if p.want_shield:
-		reach = 0.5
-	var dir := p.facing
-	if p.state == Player.State.SKILL:
-		dir = p.skill_ball_dir
-	var target := p.position + dir * reach
-	target.y = RADIUS
-	position = position.lerp(target, 1.0 - exp(-20.0 * dt))
-	position.y = RADIUS
-	velocity = p.velocity
+		reach += 0.4 + spd * 0.06 * (1.15 - p.st("dribble") * 0.5)
+	# Tiempo hasta que el jugador alcance el balón: la ventaja máxima del
+	# balón (a mitad de camino) coincide con `reach`.
+	var t := clampf(sqrt(8.0 * maxf(reach - 0.4, 0.05) / CARRY_DECEL), 0.3, 1.4)
+	var meet := p.position + pv * t + fwd * 0.45
+	var s := Vector3(meet.x - position.x, 0.0, meet.z - position.z)
+	var v0 := (s.length() + 0.5 * CARRY_DECEL * t * t) / t
+	carry_vel = s.normalized() * v0 if s.length() > 0.01 else pv
+	_touch_cd = 0.14
+	p.on_ball_touch()
 
 
 ## Postes, travesaño y red (marca in_goal cuando el balón entra).

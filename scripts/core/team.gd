@@ -73,42 +73,71 @@ func nearest_field_player(pos: Vector3, exclude: Player = null) -> Player:
 	return best
 
 
-## Elige receptor de pase según la dirección del stick (cono) y la distancia.
-func find_pass_target(from: Player, dir: Vector3, through := false) -> Player:
-	var best: Player = null
-	var best_score := INF
+## Pase normal: el compañero MÁS CERCANO en la dirección del stick (cono de
+## 35°). Si no hay nadie en el cono se abre a 80° y manda la alineación.
+func nearest_in_direction(from: Player, dir: Vector3) -> Player:
 	var d0 := Vector3(dir.x, 0.0, dir.z)
 	if d0.length() < 0.1:
 		d0 = from.facing
 	d0 = d0.normalized()
+	var best: Player = null
+	var best_d := INF
 	for t in players:
 		if t == from:
 			continue
-		var to := t.position - from.position
-		to.y = 0.0
+		var to := from.flat_to(t.position)
 		var d := to.length()
-		if d < 2.0 or d > 70.0:
+		if d < 2.5 or d > 70.0:
+			continue
+		if absf(d0.signed_angle_to(to, Vector3.UP)) <= deg_to_rad(35.0) and d < best_d:
+			best_d = d
+			best = t
+	if best != null:
+		return best
+	var best_s := INF
+	for t in players:
+		if t == from:
+			continue
+		var to2 := from.flat_to(t.position)
+		var d2 := to2.length()
+		if d2 < 2.5 or d2 > 70.0:
+			continue
+		var ang := absf(d0.signed_angle_to(to2, Vector3.UP))
+		if ang > deg_to_rad(80.0):
+			continue
+		var s := ang * 20.0 + d2 * 0.15 + (12.0 if t.role == Player.Role.GK else 0.0)
+		if s < best_s:
+			best_s = s
+			best = t
+	return best
+
+
+## Pase al hueco: el compañero mejor alineado con el stick (se prefieren los
+## que van al espacio y los que están más adelantados).
+func through_target(from: Player, dir: Vector3) -> Player:
+	var d0 := Vector3(dir.x, 0.0, dir.z)
+	if d0.length() < 0.1:
+		d0 = from.facing
+	d0 = d0.normalized()
+	var best: Player = null
+	var best_s := INF
+	for t in players:
+		if t == from or t.role == Player.Role.GK:
+			continue
+		var to := from.flat_to(t.position)
+		var d := to.length()
+		if d < 3.0 or d > 60.0:
 			continue
 		var ang := absf(d0.signed_angle_to(to, Vector3.UP))
-		if ang > deg_to_rad(60.0):
+		if ang > deg_to_rad(55.0):
 			continue
-		var s := ang * 16.0 + d * 0.3
-		if through and t.making_run:
-			s -= 4.0
-		if t.role == Player.Role.GK:
-			s += 14.0
-		if s < best_score:
-			best_score = s
+		var s := ang * 14.0 + absf(d - 16.0) * 0.12 - (3.0 if t.making_run else 0.0)
+		if s < best_s:
+			best_s = s
 			best = t
-	if best == null:
-		# Sin nadie en el cono: el más alineado con la dirección
-		for t in players:
-			if t == from or t.role == Player.Role.GK:
-				continue
-			var to2 := t.position - from.position
-			to2.y = 0.0
-			var s2 := absf(d0.signed_angle_to(to2, Vector3.UP)) * 16.0 + to2.length() * 0.3
-			if s2 < best_score:
-				best_score = s2
-				best = t
 	return best
+
+
+## Compatibilidad: receptor para técnicas e IA.
+func find_pass_target(from: Player, dir: Vector3, through := false) -> Player:
+	return through_target(from, dir) if through else nearest_in_direction(from, dir)

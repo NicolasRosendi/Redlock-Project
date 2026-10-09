@@ -25,13 +25,18 @@ El tope baja un 12 % de lo gastado (escalado según la duración del partido) y 
 
 ## Acciones con balón
 
-- **Pase raso / bombeado / al hueco / centro.** El receptor se elige con un cono alrededor del stick (indicador blanco bajo
-  el compañero). La fuerza se calcula para que llegue al pie del receptor *adelantándose a su carrera*; mantener el botón
-  envía el balón más fuerte (y en los pases al hueco, más largo). La precisión depende del atributo de pase y de la presión.
-- **Tiro.** Mantener carga la potencia (≈0,9 s). Más potencia = más alto; por encima del 85 % aparece error vertical (se va por
-  arriba). Sin dirección en el stick apunta al palo contrario del portero. El efecto lateral se aplica solo cuando disparas
-  cruzado respecto de tu carrera y es mayor en tiros suaves (colocados). El solver compensa la curva para que el balón termine
-  donde apuntaste.
+- **Stick = giroscopio.** El balón sale hacia donde apunta el stick.
+- **Pase normal (Cruz):** al compañero *más cercano* dentro de un cono de 35° alrededor del stick (aro blanco bajo él). Si el
+  stick no apunta justo al compañero, el balón sale en la dirección del stick (hasta 24° raso, 32° bombeado) y un solver
+  numérico busca el efecto lateral necesario para que la curva termine en el receptor, adelantándose a su carrera.
+- **Pase al hueco (Triángulo):** al espacio que hay delante del compañero mejor alineado, en la dirección del stick
+  (aro amarillo). Sin compañero en esa dirección, el balón va al espacio hacia donde apuntas.
+- **Tiro.** El ángulo del stick respecto del centro del arco se aplica a la mitad (para poder apuntar a los palos con
+  precisión); si el punto cae cerca del arco, se mete dentro (asistencia); si apuntas lejos, sale desviado. La potencia (≈0,9 s)
+  fija la altura; por encima del 85 % el tiro sube por encima del travesaño. Sin stick, apunta al palo contrario del portero.
+  La mira sobre el arco se pone roja si el tiro va afuera.
+- **Tiro curvo (R1 + Cuadrado):** mucho efecto hacia dentro; la compensación de la curva es imperfecta a propósito
+  (entre 80 % y 145 %), así que a veces se abre y sale.
 - **Tiro raso:** doble toque de Cuadrado (durante el armado del primer toque).
 - **Vaselina:** L1 + Cuadrado.
 - **Amague / cancelación:** tiro + Cruz (o pase + Cuadrado) durante la carga o el armado. Da 0,35 s de evasión y 5 de energía.
@@ -47,28 +52,49 @@ El tope baja un 12 % de lo gastado (escalado según la duración del partido) y 
 
   Mientras dura la evasión los quites fallan automáticamente. Si regateas cerca de un rival y conservas la posesión 1 s, ganas energía.
 
+## Conducción y recepción
+
+El balón conducido rueda con frenado propio entre toques: en cada toque se calcula una velocidad para que el balón se adelante
+hasta una distancia máxima (≈0,8 m al trote, ≈1,8 m esprintando) y el jugador lo alcance justo a sus pies. Si el jugador gira,
+se para o el balón se le va de lado, toca otra vez. Al proteger, frenar o armar un tiro, el balón vuelve al pie. Las recepciones
+conservan entre el 4 % y el 35 % de la velocidad relativa del pase (primer toque) y el receptor humano camina solo hacia el
+pase si no tocas el stick. El portero lleva el balón en las manos dentro de su área.
+
 ## Acciones sin balón
 
 - **Quite (Círculo):** estocada corta. Éxito según quite vs. regate, fuerza, si protege (L2) y si vienes por detrás (posible falta).
-- **Barrida (Cuadrado):** largo alcance; si tocas al rival antes que al balón es falta (penal dentro del área).
+  El que pierde el duelo cae al suelo.
+- **Barrida (R1 + Círculo):** largo alcance, con polvo y aviso "¡BARRIDA!"; si tocas al rival antes que al balón es falta (penal en el área).
+- **Meter el pie (Cuadrado):** estocada rápida que suelta el balón (no lo roba). Es más fácil si el rival lleva el balón lejos del pie.
+- **Agarrar con el brazo (mantener Cuadrado al lado del rival):** lo frena y lo cansa; a los 0,7 s gana el duelo el más fuerte;
+  si lo mantienes más de 1,6 s es falta.
 - **Carga (Cruz):** duelo de fuerza + estamina hombro con hombro.
 - **L2 marcar:** más lento pero con mayor radio de intercepción; con el stick quieto se coloca solo entre el portador y el arco.
-- **L1 presionar:** corre solo hacia el portador (o al punto donde se cortará un balón suelto).
+- **L1 presionar:** corre solo hacia el portador (o al punto donde se cortará un balón suelto). En modo Equipo, un toque
+  corto de L1 cambia al compañero que llega antes al balón.
 - **Intercepciones** automáticas al pasar el balón cerca: probabilidad según atributo, velocidad del balón y si marcas.
 
-## Técnicas especiales (paleta R2)
+## Técnicas especiales (paleta R2) y kit
 
-Ranuras equipables en `GameConfig.profile.palette` y `palette_l2` (base para la personalización). Las dos ranuras libres de
-R2+L2 están reservadas para técnicas desbloqueables.
+El kit se arma en el menú (*Kit de habilidades*): 8 ranuras (R2 + botón y R2 + L2 + botón), cualquier técnica en cualquier
+ranura (el Despertar solo una vez). Se guarda en `GameConfig.profile.palette` / `palette_l2`.
 
-| Técnica | Barras | Efecto |
-|---|---|---|
-| Pase Meteoro | 1 | Pase rasante a 28+ m/s; los rivales no pueden tocarlo (salvo con Quite Relámpago, 50 %) |
-| Quite Relámpago | 1 | Embestida a 19 m/s hasta 12 m: roba al portador o captura el balón suelto. Falla contra Regate Fantasma |
-| Regate Fantasma | 1 | 1,3 s intocable a +40 % velocidad; 60 % de tumbar a los rivales que se crucen |
-| Disparo Directo | 2 | 36 m/s, topspin y algo de *knuckle*; −35 % de probabilidad de atajada |
-| Meteoro Descendente | 3 | Sube, curva y cae en picada a la escuadra; −55 % de probabilidad de atajada |
-| Despertar | 3 | 20 s de "Flow" según el tipo elegido |
+| Técnica | Tipo | Barras | Efecto |
+|---|---|---|---|
+| Disparo Directo | Tiro | 2 | 36 m/s, topspin y algo de *knuckle*; −35 % de probabilidad de atajada |
+| Curva del Ego | Tiro | 2 | Sale por fuera y se cierra con muchísimo efecto; −40 % |
+| Tiro Fantasma | Tiro | 2 | Sin rotación: baila en el aire (puede irse); −45 % |
+| Meteoro Descendente | Tiro | 3 | Sube, curva y cae en picada a la escuadra; −55 % |
+| Regate Fantasma | Regate | 1 | 1,3 s intocable a +40 % de velocidad; 60 % de tumbar a quien se cruce |
+| Regate Relámpago | Regate | 1 | Zigzag de 4,5 m en 0,2 s hacia el stick (o lejos del rival), con estela |
+| Sombrero Celestial | Regate | 2 | Balón por encima del rival (solo tu equipo puede tocarlo) y aceleración |
+| Torbellino | Regate | 1 | Ruleta que derriba a los rivales a menos de 2,8 m |
+| Pase Meteoro | Pase | 1 | Rasante a 28+ m/s; no se puede interceptar |
+| Pase Bumerán | Pase | 1 | Sale abierto hacia el lado con menos rivales y se cierra al compañero; no se puede cortar |
+| Centro Teledirigido | Pase | 1 | Centro a la cabeza del compañero, que remata de primera solo |
+| Quite Relámpago | Defensa | 1 | Embestida a 19 m/s hasta 12 m: roba o captura el balón suelto |
+| Muro de Acero | Defensa | 1 | 3 s bloqueando todo pase o tiro a 2,3 m (los pases especiales, al 50 %) |
+| Despertar | Transformación | 3 | 20 s de "Flow" según el tipo elegido |
 
 ## Despertares
 
@@ -95,8 +121,8 @@ Todos además: +4 % de velocidad, recarga de estamina y aura visual.
 
 ## Hoja de ruta
 
-1. **Pulido del prototipo** (siguiente paso): probar con mando real y ajustar números; animaciones (modelos con esqueleto
-   y blend de carrera), sonido (golpeo, público, gritos de técnicas), mejor cámara en córners/penales, fuera de juego real y tarjetas.
+1. **Pulido del prototipo** (siguiente paso): probar con mando real y ajustar números; modelos con esqueleto real y
+   animaciones capturadas, sonido (golpeo, público, gritos de técnicas), mejor cámara en córners/penales, fuera de juego real y tarjetas.
 2. **Creador de personaje** estilo Xenoverse 2: cuerpo, cara, pelo, botines; reparto de puntos de atributo; equipar técnicas en
    las ranuras R2 / R2+L2; elegir tipo de Despertar.
 3. **Modo carrera "Blue Lock"**: selecciones por rondas, partidos 1v1/3v3/5v5/11v11, ranking, rivales con ego propio,

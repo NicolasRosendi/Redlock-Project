@@ -12,8 +12,10 @@ var held: Array[String] = []
 var log_lines: Array[String] = []
 
 const STEPS := [
-	"pass", "shot", "ground_shot", "feint", "chip", "dribble_cut", "dribble_elastic", "sombrero",
-	"special_shot", "special_pass", "special_dribble", "awaken", "meteoro", "tackle", "special_tackle", "stamina",
+	"pass", "gyro_pass_nearest", "gyro_pass_curve", "through_space", "shot", "shot_on_target", "shot_wide",
+	"overpower", "curve_shot", "ground_shot", "feint", "chip", "dribble_cut", "dribble_elastic", "sombrero",
+	"special_shot", "special_pass", "special_dribble", "awaken", "special_curve", "tackle", "slide", "poke", "arm",
+	"special_tackle", "team_switch", "stamina",
 ]
 
 
@@ -67,6 +69,40 @@ func _setup_attack() -> void:
 	var mate := m.teams[0].players[4]
 	mate.frozen = true
 	mate.position = Vector3(m.hl - 12.0, 0, -8.0)
+
+
+func _clear_mates() -> void:
+	var h := m.human.player
+	for p in m.teams[0].players:
+		if p != h and p.role != Player.Role.GK:
+			p.position = Vector3(-m.hl + 4.0, 0, -m.hw + 2.0 + p.get_index() * 0.3)
+			p.velocity = Vector3.ZERO
+
+
+func _mate(i: int, pos: Vector3) -> void:
+	var p := m.teams[0].players[i]
+	p.position = pos
+	p.velocity = Vector3.ZERO
+
+
+func _give_opp_ball(dist: float) -> Player:
+	var h := m.human.player
+	var opp := m.teams[1].players[3]
+	opp.frozen = false
+	opp.position = h.position + Vector3.RIGHT * maxf(dist, 0.5)
+	opp.facing = Vector3.RIGHT
+	m.ball.place(opp.position + Vector3.RIGHT * 0.4)
+	m.ball.set_carrier(opp)
+	h.facing = Vector3.RIGHT
+	return opp
+
+
+## Dónde cruzará el balón la línea de gol rival (según la trayectoria).
+func _goal_crossing() -> Vector3:
+	for bp in m.ball.predict(3.0, 0.02):
+		if bp.x >= m.hl:
+			return bp
+	return Vector3(m.hl, 99.0, 99.0)
 
 
 func _physics_process(_dt: float) -> void:
@@ -170,12 +206,109 @@ func _physics_process(_dt: float) -> void:
 			if t == 6:
 				_check("R2 + L2 + Círculo = Despertar", h.awakened and h.awakening_id == "tiro", "id=%s" % h.awakening_id)
 				done = true
-		"meteoro":
+		"special_curve":
 			if t == 1: h.energy = SkillDB.MAX_ENERGY
 			if t == 2: _press("power"); _press("mark")
 			if t == 3: _press("btn_square")
 			if t == 40:
-				_check("R2 + L2 + Cuadrado = Meteoro Descendente", b.special_id == "meteoro_descendente", "special=%s" % b.special_id)
+				_check("R2 + L2 + Cuadrado = Curva del Ego (kit por defecto)", b.special_id == "curva_del_ego" and absf(b.side_spin) > 0.5, "special=%s efecto=%.2f" % [b.special_id, b.side_spin])
+				done = true
+		"gyro_pass_nearest":
+			if t == 1:
+				_clear_mates()
+				_mate(4, h.position + Vector3(0, 0, -8))
+				_mate(5, h.position + Vector3(0, 0, -15))
+				_mate(3, h.position + Vector3(9, 0, 1))
+			if t == 2: _press("move_up"); _press("btn_cross")
+			if t == 5: _release("btn_cross")
+			if t == 25:
+				var tg := b.pass_target
+				_check("pase al más cercano hacia donde apunta el stick", tg == m.teams[0].players[4], "receptor=%s" % (tg.player_name if tg else "nadie"))
+				done = true
+		"gyro_pass_curve":
+			if t == 1:
+				_clear_mates()
+				_mate(4, h.position + Vector3(8, 0, -6))
+			if t == 2: _press("move_right"); _press("btn_cross")
+			if t == 5: _release("btn_cross")
+			if t == 25:
+				_check("pase con curva: sale hacia el stick y se cierra al compañero", b.pass_target == m.teams[0].players[4] and absf(b.side_spin) > 0.05, "efecto=%.2f" % b.side_spin)
+				done = true
+		"through_space":
+			if t == 1:
+				_clear_mates()
+			if t == 2: _press("move_down"); _press("btn_triangle")
+			if t == 6: _release("btn_triangle")
+			if t == 25:
+				var v := Vector3(b.velocity.x, 0, b.velocity.z).normalized()
+				_check("al hueco sin compañero: el balón va hacia el stick", b.kick_kind == "pass" and v.dot(Vector3(0, 0, 1)) > 0.85, "dir=%s" % v)
+				done = true
+		"shot_on_target":
+			if t == 2: _press("move_right"); _press("btn_square")
+			if t == 30: _release("btn_square")
+			if t == 50:
+				var cz := _goal_crossing()
+				_check("tiro apuntando al arco va al arco", absf(cz.z) < m.gw * 0.5 + 0.2 and cz.y < m.gh + 0.3, "cruce=(%.1f, %.1f)" % [cz.z, cz.y])
+				done = true
+		"shot_wide":
+			if t == 2: _press("move_up"); _press("btn_square")
+			if t == 30: _release("btn_square")
+			if t == 50:
+				var cz2 := _goal_crossing()
+				_check("tiro apuntando lejos del arco sale desviado", absf(cz2.z) > m.gw * 0.5, "cruce z=%.1f" % cz2.z)
+				done = true
+		"overpower":
+			if t == 2: _press("move_right"); _press("btn_square")
+			if t == 70:
+				var pp := h.preview_shot_point("shot", h.charge_amount())
+				_check("pasarse de potencia apunta por encima del travesaño", pp.y > m.gh, "y=%.2f carga=%.2f" % [pp.y, h.charge_amount()])
+				_release("btn_square")
+			if t == 90:
+				done = true
+		"curve_shot":
+			if t == 2: _press("sprint"); _press("move_right")
+			if t == 4: _press("btn_square")
+			if t == 30: _release("btn_square")
+			if t == 50:
+				_check("R1 + Cuadrado = tiro curvo con mucho efecto", b.kick_kind == "shot" and absf(b.side_spin) > 0.5, "efecto=%.2f" % b.side_spin)
+				done = true
+		"slide":
+			if t == 1: _give_opp_ball(1.8)
+			if t == 2: _press("sprint")
+			if t == 3: _press("btn_circle")
+			if t == 6:
+				_check("R1 + Círculo = barrida", h.state == Player.State.SLIDE)
+				done = true
+		"poke":
+			if t == 1: _give_opp_ball(1.2)
+			if t == 2: _press("btn_square")
+			if t == 4:
+				_check("Cuadrado sin balón = meter el pie", h.state == Player.State.POKE)
+				done = true
+		"arm":
+			if t == 1:
+				var o := _give_opp_ball(0.0)
+				o.position = h.position + Vector3(0, 0, 1.0)
+				o.facing = Vector3.RIGHT
+				b.place(o.position + Vector3.RIGHT * 0.5)
+				b.set_carrier(o)
+			if t == 2: _press("btn_square")
+			if t == 20:
+				var o2 := m.teams[1].players[3]
+				_check("mantener Cuadrado al lado = agarrar con el brazo", h.arm_target == o2 or b.carrier != o2, "objetivo=%s" % (h.arm_target.player_name if h.arm_target else "nadie"))
+				done = true
+		"team_switch":
+			if t == 1:
+				GameConfig.control_mode = GameConfig.ControlMode.TEAM
+				_give_opp_ball(15.0)
+				log_lines.append(h.player_name)
+			if t == 3: _press("press")
+			if t == 5: _release("press")
+			if t == 8:
+				var nw := m.human.player
+				_check("modo Equipo: toque de L1 cambia de jugador", nw.player_name != log_lines[-1], "%s → %s" % [log_lines[-1], nw.player_name])
+				GameConfig.control_mode = GameConfig.ControlMode.PRO
+				m.human.switch_to(m.teams[0].players[m.teams[0].players.size() - 1])
 				done = true
 		"tackle":
 			if t == 1:

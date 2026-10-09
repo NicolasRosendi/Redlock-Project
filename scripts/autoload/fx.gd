@@ -116,3 +116,43 @@ func ring(pos: Vector3, color: Color, max_radius := 3.0, life := 0.45) -> void:
 	tw.tween_property(mi, "scale", Vector3(max_radius, 0.05, max_radius), life)
 	tw.tween_property(mat, "albedo_color:a", 0.0, life)
 	tw.chain().tween_callback(mi.queue_free)
+
+
+## Texto que aparece sobre la jugada ("¡QUITE!", "¡ATAJADA!") para que se
+## entienda al instante qué pasó.
+func popup(pos: Vector3, text: String, color: Color, size := 1.0) -> void:
+	if world == null:
+		return
+	var l := Label3D.new()
+	l.text = text
+	l.font_size = 80
+	l.pixel_size = 0.011 * size
+	l.outline_size = 22
+	l.modulate = color
+	l.outline_modulate = Color(0, 0, 0, 0.9)
+	l.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	l.no_depth_test = true
+	l.render_priority = 10
+	l.outline_render_priority = 9
+	world.add_child(l)
+	l.global_position = pos + Vector3.UP * 2.6
+	l.scale = Vector3.ONE * 0.3
+	var tw := l.create_tween()
+	tw.tween_property(l, "scale", Vector3.ONE * 1.15, 0.12).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tw.tween_property(l, "scale", Vector3.ONE, 0.08)
+	tw.parallel().tween_property(l, "global_position:y", l.global_position.y + 0.9, 0.9)
+	tw.tween_property(l, "modulate:a", 0.0, 0.3)
+	tw.parallel().tween_property(l, "outline_modulate:a", 0.0, 0.3)
+	tw.tween_callback(l.queue_free)
+
+
+## Congelado breve (hit-stop) que remarca los impactos: quites, atajadas...
+func hitstop(real_seconds := 0.07) -> void:
+	var until := Time.get_ticks_msec() + int(real_seconds * 1000.0)
+	if _slow_until_ms > until:
+		return
+	slowmo(0.06, real_seconds)
+
+
+func dust(pos: Vector3, amount := 6) -> void:
+	burst(Vector3(pos.x, 0.1, pos.z), Color(0.62, 0.52, 0.36, 0.8), amount, 2.0, 0.45)

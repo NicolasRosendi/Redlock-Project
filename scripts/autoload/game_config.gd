@@ -28,7 +28,8 @@ var profile := {
 		"passing": 0.66, "dribble": 0.72, "tackle": 0.5, "strength": 0.6,
 		"jump": 0.6, "intercept": 0.55, "reflex": 0.3,
 	},
-	# Técnicas equipadas en la paleta R2 (y R2 + L2). Vacío = ranura libre.
-	"palette": {"cross": "pase_meteoro", "circle": "quite_relampago", "triangle": "regate_fantasma", "square": "disparo_directo"},
-	"palette_l2": {"cross": "", "circle": "despertar", "triangle": "", "square": "meteoro_descendente"},
+	# Kit de técnicas equipadas en la paleta R2 (y R2 + L2). Vacío = ranura libre.
+	# Se edita en el menú "Kit de habilidades".
+	"palette": SkillDB.DEFAULT_PALETTE.duplicate(),
+	"palette_l2": SkillDB.DEFAULT_PALETTE_L2.duplicate(),
 }

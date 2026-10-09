@@ -6,29 +6,24 @@ extends CanvasLayer
 const HELP_TEXT := """[b]CONTROLES[/b]  (mando PlayStation · teclado entre corchetes)
 
 [b]Movimiento[/b]
-Stick izq. [WASD] mover · R1 [Shift] correr
-L2 [Q] marcar / contener (con balón: proteger)
-L1 [E] presionar al rival · con balón: modificador de picar
+Stick izq. [WASD] mover y APUNTAR: pases y tiros van hacia donde apunta el stick
+R1 [Shift] correr · L2 [Q] marcar / contener (con balón: proteger)
+L1 [E] presionar · modo Equipo: toque corto = cambiar de jugador
 
 [b]Ataque[/b]
-Cruz [K] pase raso (mantener = más fuerte) · L1+Cruz pase bombeado
-Triángulo [I] pase al hueco · L1+Triángulo al hueco por arriba
-Círculo [L] centro
-Cuadrado [J] tiro (mantener = potencia) · L1+Cuadrado vaselina
-Cuadrado dos veces: tiro raso · Tiro + Cruz rápido: amague (cancelar)
-Stick der. [flechas] regates · con L2: regates mejorados
-  adelante: toque largo / sombrero · lado: recorte / elástica
-  atrás: arrastre / ruleta
+Cruz [K] pase al compañero más cercano en esa dirección (curva si el stick no apunta justo)
+Triángulo [I] pase al hueco · L1 + Cruz/Triángulo: por arriba · Círculo [L] centro
+Cuadrado [J] tiro (mantener = potencia; pasarse = se va alto; aro rojo = afuera)
+R1 + Cuadrado tiro curvo (mucho efecto, puede abrirse) · L1 + Cuadrado vaselina
+Cuadrado dos veces: tiro raso · Tiro + Cruz rápido: amague
+Stick der. [flechas] regates · con L2: sombrero, elástica, ruleta
 
 [b]Defensa[/b]
-Círculo [L] quite · Cuadrado [J] barrida · Cruz [K] cargar con el cuerpo
+Círculo [L] quite · R1 + Círculo barrida · Cruz [K] cargar con el cuerpo
+Cuadrado [J] meter el pie · mantener Cuadrado al lado del rival: agarrar con el brazo
 Balón suelto cerca: Cuadrado/Cruz = remate o pase de primera (cabezazo/volea)
-R3 [R] cambiar de jugador (modo Equipo)
 
-[b]Técnicas (gastan energía)[/b]
-R2+Cruz Pase Meteoro · R2+Círculo Quite Relámpago
-R2+Triángulo Regate Fantasma · R2+Cuadrado Disparo Directo
-R2+L2+Cuadrado Meteoro Descendente · R2+L2+Círculo DESPERTAR
+[b]Técnicas[/b]  R2 + botón / R2 + L2 + botón (se eligen en "Kit de habilidades")
 
 [b]Otros[/b]
 Cruceta izq/der [1/2] tipo de despertar · arriba [3] energía al máximo (debug)
