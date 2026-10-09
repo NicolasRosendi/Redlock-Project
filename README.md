@@ -4,9 +4,12 @@ Prototipo de **gameplay** para un RPG de fútbol inspirado en *Blue Lock*, *Capt
 La meta de esta primera etapa es pulir el juego en la cancha: **arcade y fluido**, realista en las jugadas normales y espectacular
 (cámara lenta, primeros planos, estelas, auras) en las técnicas especiales.
 
-Motor: **Godot 4.3+** (GDScript). Gráficos sencillos generados por código: no hace falta ningún asset externo.
+Motor: **Godot 4.3+** (GDScript). Gráficos generados por código (sombreado anime con contorno, dragones de energía
+procedurales): no hace falta ningún asset externo. Para el siguiente salto visual ver [`docs/ARTE_Y_ASSETS.md`](docs/ARTE_Y_ASSETS.md).
 
-![Técnica especial](docs/img/tecnica.jpg)
+| Dragones de energía de las técnicas | Sombreado anime con contorno |
+|---|---|
+| ![Dragones](docs/img/dragones.jpg) | ![Cara anime](docs/img/cara_anime.jpg) |
 
 | Quite (el rival cae y aparece el aviso) | Barrida | Estirada del portero |
 |---|---|---|
@@ -52,8 +55,11 @@ en esa dirección, el pase sale hacia el stick y se cierra con efecto hasta él.
 | **Stick der.** [flechas] | Regates: adelante *toque largo*, lado *recorte*, atrás *arrastre*; con L2: *sombrero*, *elástica*, *ruleta* | — |
 | Balón suelto cerca | Cuadrado/Cruz = remate o pase **de primera** (cabezazo/volea automáticos) | |
 
-**Tiros:** la mira (aro sobre el arco) muestra a dónde va el tiro mientras cargas; se pone **roja si va afuera**.
-Apuntar lejos del arco, **pasarse de potencia** (se va por arriba) o el **tiro curvo** (mucho efecto, a veces se abre) pueden fallar.
+**Tiros ("ruleta"):** el stick marca la intención: si apuntas *más o menos* a un palo, se entiende que vas a esa esquina;
+al centro, al centro; lejos del arco, afuera. La potencia decide la altura. En el instante del disparo el juego calcula la
+probabilidad de ir al arco y de ser gol (atributos **Tiro**, **Curva** y **Potencia**, distancia, ángulo, presión, cansancio,
+portero...), tira la "ruleta" y resuelve; la física solo representa el resultado (gol, atajada, palo o afuera). Al disparar
+tu jugador ves la probabilidad ("GOL 34%"). Pasarse de potencia y el tiro curvo (R1) bajan mucho la precisión.
 
 **Paleta de técnicas (mantener R2, o R2 + L2), estilo Xenoverse 2.** Las 8 ranuras se eligen antes del partido en
 **Kit de habilidades** (menú principal): puedes llevar, por ejemplo, dos tiros (uno curvo y uno directo) o dos regates.
@@ -74,6 +80,11 @@ Select [C] cámara (TV / detrás del jugador), Start [Esc] pausa, R3 [R] cambiar
 
 ## Sistemas implementados
 
+- **Partido en dos tiempos**: en el entretiempo se cambia de lado y se recupera el 60 % de la estamina perdida. Cada tiempo
+  tiene **descuento** según faltas, corners, goles y saques (se ve en el reloj: 45+2').
+- **Saques con distancia**: en el saque del medio cada equipo en su campo y el rival fuera del círculo; 4 m en los saques de
+  banda; 9,15 m en corners y tiros libres; fuera del área en saques de arco y penales. Los despejes del portero y los
+  bloqueos pueden irse al córner.
 - **Estamina vs. energía.** La *estamina* se gasta al correr, marcar, chocar, saltar y regatear; al dejar de correr se recupera,
   pero **solo hasta un tope que baja con el cansancio** (la línea blanca de la barra). La *energía* (5 barras de 100) se gana
   jugando; lo que más da: **gol 160** (+20 a todo el equipo), **asistencia 90**, **regate que deja atrás al rival 40**
@@ -129,3 +140,4 @@ el mando (pase al más cercano, pase curvo, al hueco, tiro al arco y desviado, p
 vaselina, regates, técnicas, despertar, quite, barrida, meter el pie, agarrar, cambio con L1, estamina) y partidos IA vs IA.
 
 Más detalles de diseño y próximos pasos en [`docs/DISENO_GAMEPLAY.md`](docs/DISENO_GAMEPLAY.md).
+Arte, motor y fuentes legales de assets en [`docs/ARTE_Y_ASSETS.md`](docs/ARTE_Y_ASSETS.md).

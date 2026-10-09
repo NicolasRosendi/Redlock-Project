@@ -14,7 +14,7 @@ func _ready() -> void:
 			out_dir = a.trim_prefix("--out=")
 	GameConfig.control_mode = GameConfig.ControlMode.PRO
 	GameConfig.team_size = 7
-	GameConfig.awakening = 4
+	GameConfig.awakening = 0
 	GameConfig.camera_mode = 0
 	m = load("res://scenes/match.tscn").instantiate()
 	add_child(m)

@@ -31,12 +31,21 @@ El tope baja un 12 % de lo gastado (escalado según la duración del partido) y 
   numérico busca el efecto lateral necesario para que la curva termine en el receptor, adelantándose a su carrera.
 - **Pase al hueco (Triángulo):** al espacio que hay delante del compañero mejor alineado, en la dirección del stick
   (aro amarillo). Sin compañero en esa dirección, el balón va al espacio hacia donde apuntas.
-- **Tiro.** El ángulo del stick respecto del centro del arco se aplica a la mitad (para poder apuntar a los palos con
-  precisión); si el punto cae cerca del arco, se mete dentro (asistencia); si apuntas lejos, sale desviado. La potencia (≈0,9 s)
-  fija la altura; por encima del 85 % el tiro sube por encima del travesaño. Sin stick, apunta al palo contrario del portero.
-  La mira sobre el arco se pone roja si el tiro va afuera.
-- **Tiro curvo (R1 + Cuadrado):** mucho efecto hacia dentro; la compensación de la curva es imperfecta a propósito
-  (entre 80 % y 145 %), así que a veces se abre y sale.
+- **Tiro: intención.** El stick se proyecta sobre la línea de gol: si cae a más del 40 % del ancho desde el centro (hasta
+  6 m por fuera del palo) se entiende como esa esquina; más cerca del centro, ese punto; más lejos, el tiro va afuera a
+  propósito. La potencia fija la altura (poca = abajo, mucha = arriba). Sin stick, al palo contrario del portero.
+- **Tiro: ruleta (backend).** Al disparar se calculan dos probabilidades:
+  - *Ir al arco*: 0,5 + 0,45·Tiro − 0,014 por metro sobre 11 m − 0,18·presión − 0,45·exceso de potencia − ángulo
+    cerrado, con modificadores por tipo (raso +0,05, curvo −0,15 + 0,3·Curva, vaselina −0,1, volea −0,15, cabezazo según
+    Salto), −0,05 a la escuadra, −0,08 si estás agotado, +0,3 en técnicas. Si apuntaste afuera, 0.
+  - *Que el portero no llegue*: velocidad del tiro, colocación, distancia lateral al portero frente a lo que puede cubrir en
+    el tiempo de vuelo, Reflejos del portero, altura (abajo/arriba +0,06), Curva en tiros curvos y el bonus de rotura de
+    las técnicas.
+  Se tira el dado y el resultado (gol / atajada / afuera) queda guardado en el balón: el punto final se ajusta lo más cerca
+  posible de donde apuntaste (lejos de las manos si es gol, a su alcance si es atajada, fuera del arco, sobre el travesaño
+  o al palo si es afuera). Los defensas no pueden bloquear un tiro resuelto como gol y, si la física llevara adentro un tiro
+  resuelto como atajada, el portero lo saca con la punta de los dedos al córner.
+
 - **Tiro raso:** doble toque de Cuadrado (durante el armado del primer toque).
 - **Vaselina:** L1 + Cuadrado.
 - **Amague / cancelación:** tiro + Cruz (o pase + Cuadrado) durante la carga o el armado. Da 0,35 s de evasión y 5 de energía.

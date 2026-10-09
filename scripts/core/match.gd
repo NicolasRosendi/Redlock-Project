@@ -684,11 +684,28 @@ func on_special(p: Player, sid: String) -> void:
 		title = "DESPERTAR: " + String(a["name"]).to_upper()
 	FX.slowmo(0.3, 0.75)
 	FX.closeup(p, 0.6)
+	_spawn_dragon(p, sid, col)
 	FX.burst(p.position + Vector3.UP, col, 36, 7.0)
 	FX.ring(p.position, col, 4.5, 0.6)
 	special_used.emit(p, sid)
 	if hud != null:
 		hud.show_special(title, p.player_name, col)
+
+
+## Criatura de energía de cada técnica (estilo Captain Tsubasa).
+func _spawn_dragon(p: Player, sid: String, col: Color) -> void:
+	var sd := SkillDB.special(sid)
+	var bright := col.lightened(0.65)
+	match String(sd.get("kind", "")):
+		"shot":
+			var big := 1.35 if sid == "meteoro_descendente" else 1.1
+			EnergyDragon.spawn(self, ball, col, bright, big, 2.8)
+		"pass":
+			EnergyDragon.spawn(self, ball, col, bright, 0.6, 2.0)
+		"awaken":
+			EnergyDragon.spawn(self, p, col, bright, 0.8, 2.4, Vector3(0, 1.3, 0))
+		"dribble", "tackle":
+			EnergyDragon.spawn(self, p, col, bright, 0.5, 1.4, Vector3(0, 0.9, 0))
 
 
 func on_energy_bar(p: Player) -> void:
@@ -1032,24 +1049,40 @@ func _build_world() -> void:
 	e.background_mode = Environment.BG_SKY
 	var sky := Sky.new()
 	var sm := ProceduralSkyMaterial.new()
-	sm.sky_top_color = Color(0.22, 0.42, 0.78)
-	sm.sky_horizon_color = Color(0.66, 0.76, 0.9)
+	sm.sky_top_color = Color(0.16, 0.3, 0.68)
+	sm.sky_horizon_color = Color(0.95, 0.72, 0.52)
+	sm.sun_angle_max = 20.0
 	sm.ground_horizon_color = Color(0.4, 0.45, 0.4)
 	sm.ground_bottom_color = Color(0.1, 0.12, 0.1)
 	sky.sky_material = sm
 	e.sky = sky
 	e.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
-	e.ambient_light_energy = 0.7
-	e.tonemap_mode = Environment.TONE_MAPPER_FILMIC
+	e.ambient_light_energy = 0.75
+	e.tonemap_mode = Environment.TONE_MAPPER_ACES
+	e.tonemap_exposure = 0.95
 	e.glow_enabled = true
-	e.glow_intensity = 0.5
-	e.glow_bloom = 0.04
+	e.glow_intensity = 0.8
+	e.glow_strength = 1.1
+	e.glow_bloom = 0.08
+	e.glow_hdr_threshold = 0.9
+	e.glow_blend_mode = Environment.GLOW_BLEND_MODE_SCREEN
+	# SSAO solo existe en Forward+
+	var method := ""
+	if RenderingServer.has_method("get_current_rendering_method"):
+		method = String(RenderingServer.call("get_current_rendering_method"))
+	e.ssao_enabled = method == "forward_plus"
+	e.ssao_radius = 1.2
+	e.ssao_intensity = 1.5
+	e.adjustment_enabled = true
+	e.adjustment_saturation = 1.0
+	e.adjustment_contrast = 1.05
 	env.environment = e
 	add_child(env)
 
 	var sun := DirectionalLight3D.new()
 	sun.rotation_degrees = Vector3(-58.0, -35.0, 0.0)
-	sun.light_energy = 1.15
+	sun.light_energy = 1.2
+	sun.light_color = Color(1.0, 0.93, 0.82)
 	sun.shadow_enabled = true
 	sun.directional_shadow_max_distance = 140.0
 	add_child(sun)
@@ -1158,6 +1191,35 @@ func _build_stands() -> void:
 		# Gira hacia la cancha y se inclina (la cara superior mira al campo)
 		mi.transform = Transform3D(Basis(Vector3.UP, deg_to_rad(st[2])) * Basis(Vector3.RIGHT, deg_to_rad(38.0)), st[1])
 		add_child(mi)
+	# Torres de focos en las esquinas
+	var lamp_mat := StandardMaterial3D.new()
+	lamp_mat.albedo_color = Color(1, 1, 0.95)
+	lamp_mat.emission_enabled = true
+	lamp_mat.emission = Color(1.0, 0.97, 0.85)
+	lamp_mat.emission_energy_multiplier = 4.0
+	var pole_mat := StandardMaterial3D.new()
+	pole_mat.albedo_color = Color(0.3, 0.32, 0.36)
+	pole_mat.metallic = 0.6
+	for sx in [-1.0, 1.0]:
+		for sz in [-1.0, 1.0]:
+			var base := Vector3(sx * (hl + 12.0), 0.0, sz * (hw + 12.0))
+			var pole := MeshInstance3D.new()
+			var pc := CylinderMesh.new()
+			pc.top_radius = 0.35
+			pc.bottom_radius = 0.6
+			pc.height = 30.0
+			pole.mesh = pc
+			pole.material_override = pole_mat
+			pole.position = base + Vector3(0, 15.0, 0)
+			add_child(pole)
+			var panel := MeshInstance3D.new()
+			var pb := BoxMesh.new()
+			pb.size = Vector3(5.0, 3.0, 0.4)
+			panel.mesh = pb
+			panel.material_override = lamp_mat
+			panel.position = base + Vector3(0, 30.5, 0)
+			add_child(panel)
+			panel.look_at(Vector3(0, 0, 0), Vector3.UP)
 	# Vallas publicitarias
 	var colors := [Color(0.1, 0.3, 0.9), Color(0.85, 0.15, 0.2), Color(0.95, 0.95, 0.95), Color(0.05, 0.05, 0.08)]
 	var n := int(hl * 2.0 / 8.0)

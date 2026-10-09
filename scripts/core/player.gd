@@ -111,6 +111,7 @@ var _ring: MeshInstance3D
 var _arrow: MeshInstance3D
 var _aura: Node3D
 var _aura_mat: StandardMaterial3D
+var _aura_flame: ShaderMaterial
 var _aura_light: OmniLight3D
 var _aura_particles: CPUParticles3D
 var _wall_fx: MeshInstance3D
@@ -302,6 +303,7 @@ func activate_awakening() -> bool:
 	stamina = stamina_cap
 	var col: Color = SkillDB.awakening_by_id(awakening_id)["color"]
 	_aura_mat.albedo_color = Color(col.r, col.g, col.b, 0.22)
+	_aura_flame.set_shader_parameter("color", col)
 	_aura_light.light_color = col
 	var pm := _aura_particles.mesh.surface_get_material(0) as StandardMaterial3D
 	if pm:
@@ -1609,15 +1611,23 @@ func _build_visual() -> void:
 	var gk := role == Role.GK
 	var shirt := team.gk_color if gk else team.color
 	var mine := is_human and team.id == 0
-	var skin: Color = GameConfig.profile["skin"] if mine else Color(0.88, 0.7, 0.55).lerp(Color(0.42, 0.28, 0.18), randf() * 0.7)
-	var hair: Color = GameConfig.profile["hair"] if mine else Color(0.1, 0.08, 0.06).lerp(Color(0.85, 0.75, 0.4), randf() * randf())
+	var rng := RandomNumberGenerator.new()
+	rng.seed = hash(player_name + str(team_id) + str(number))
+	var skin: Color = GameConfig.profile["skin"] if mine else Color(0.96, 0.8, 0.66).lerp(Color(0.55, 0.38, 0.26), rng.randf() * 0.6)
+	var hair_palette := [Color(0.07, 0.07, 0.09), Color(0.25, 0.15, 0.08), Color(0.95, 0.85, 0.5), Color(0.85, 0.2, 0.15),
+		Color(0.9, 0.9, 0.95), Color(0.15, 0.25, 0.6), Color(0.4, 0.75, 0.35), Color(0.6, 0.35, 0.8)]
+	var hair: Color = GameConfig.profile["hair"] if mine else hair_palette[rng.randi() % hair_palette.size()]
+	var eye_col: Color = [Color(0.15, 0.4, 0.9), Color(0.35, 0.22, 0.1), Color(0.2, 0.7, 0.4), Color(0.75, 0.2, 0.25), Color(0.85, 0.65, 0.15)][rng.randi() % 5]
+	if mine:
+		eye_col = GameConfig.profile.get("eyes", Color(0.15, 0.4, 0.9))
 	var shirt_mat := _mat(shirt)
-	var trim_mat := _mat(shirt.darkened(0.35))
+	var trim_mat := _mat(shirt.darkened(0.35) if not gk else shirt.lightened(0.3))
 	var shorts_mat := _mat(team.color2 if not gk else Color(0.12, 0.12, 0.14))
 	var skin_mat := _mat(skin)
 	var sock_mat := _mat(shirt.darkened(0.25) if not gk else Color(0.15, 0.15, 0.15))
-	var boot_mat := _mat(Color(0.08, 0.08, 0.1))
+	var boot_mat := _mat(Color(0.95, 0.95, 0.98) if rng.randf() < 0.3 else Color(0.08, 0.08, 0.1))
 	var glove_mat := _mat(Color(0.97, 0.97, 0.97))
+	var hair_mat := _mat(hair)
 
 	_root = Node3D.new()
 	add_child(_root)
@@ -1625,46 +1635,51 @@ func _build_visual() -> void:
 	_pelvis.position.y = HIP_Y
 	_root.add_child(_pelvis)
 	var shorts := _mesh_child(_pelvis, _cyl(0.2, 0.26), shorts_mat, Vector3(0, 0.02, 0))
-	shorts.scale = Vector3(1.0, 1.0, 0.8)
+	shorts.scale = Vector3(1.05, 1.0, 0.8)
 
 	_torso = Node3D.new()
 	_torso.position.y = 0.1
 	_pelvis.add_child(_torso)
-	var chest := _mesh_child(_torso, _capsule(0.235, 0.66), shirt_mat, Vector3(0, 0.32, 0))
-	chest.scale = Vector3(1.0, 1.0, 0.7)
-	_mesh_child(_torso, _cyl(0.055, 0.1), skin_mat, Vector3(0, 0.68, 0))
+	# Torso atlético: hombros anchos, cintura estrecha
+	var chest := _mesh_child(_torso, _capsule(0.235, 0.66), shirt_mat, Vector3(0, 0.34, 0))
+	chest.scale = Vector3(1.12, 1.0, 0.68)
+	var waist := _mesh_child(_torso, _cyl(0.2, 0.2), shirt_mat, Vector3(0, 0.08, 0))
+	waist.scale = Vector3(1.0, 1.0, 0.75)
+	var collar := _mesh_child(_torso, _torus(0.07, 0.1), trim_mat, Vector3(0, 0.66, 0))
+	collar.scale = Vector3(1.0, 0.6, 1.0)
+	_mesh_child(_torso, _cyl(0.055, 0.12), skin_mat, Vector3(0, 0.7, 0))
 	_head = Node3D.new()
-	_head.position.y = 0.72
+	_head.position.y = 0.74
 	_torso.add_child(_head)
-	_mesh_child(_head, _sphere(0.125), skin_mat, Vector3(0, 0.12, 0))
-	var hair_mi := _mesh_child(_head, _sphere(0.135), _mat(hair), Vector3(0, 0.17, 0.02))
-	hair_mi.scale = Vector3(1.0, 0.72, 1.05)
+	_build_anime_head(skin_mat, hair_mat, eye_col, rng)
 
-	_arm_l = _joint(_torso, Vector3(-0.29, 0.58, 0))
-	_mesh_child(_arm_l, _cyl(0.058, 0.3), shirt_mat, Vector3(0, -0.15, 0))
+	_arm_l = _joint(_torso, Vector3(-0.3, 0.58, 0))
+	_mesh_child(_arm_l, _sphere(0.062), shirt_mat, Vector3(0, -0.03, 0))
+	_mesh_child(_arm_l, _cyl(0.062, 0.16), shirt_mat, Vector3(0, -0.08, 0))
+	_mesh_child(_arm_l, _cyl(0.05, 0.16), skin_mat, Vector3(0, -0.22, 0))
 	_elbow_l = _joint(_arm_l, Vector3(0, -0.3, 0))
-	_mesh_child(_elbow_l, _cyl(0.048, 0.26), skin_mat, Vector3(0, -0.13, 0))
+	_mesh_child(_elbow_l, _cyl(0.046, 0.26), skin_mat, Vector3(0, -0.13, 0))
 	_mesh_child(_elbow_l, _sphere(0.085 if gk else 0.052), glove_mat if gk else skin_mat, Vector3(0, -0.29, 0))
-	_arm_r = _joint(_torso, Vector3(0.29, 0.58, 0))
-	_mesh_child(_arm_r, _cyl(0.058, 0.3), shirt_mat, Vector3(0, -0.15, 0))
+	_arm_r = _joint(_torso, Vector3(0.3, 0.58, 0))
+	_mesh_child(_arm_r, _sphere(0.062), shirt_mat, Vector3(0, -0.03, 0))
+	_mesh_child(_arm_r, _cyl(0.062, 0.16), shirt_mat, Vector3(0, -0.08, 0))
+	_mesh_child(_arm_r, _cyl(0.05, 0.16), skin_mat, Vector3(0, -0.22, 0))
 	_elbow_r = _joint(_arm_r, Vector3(0, -0.3, 0))
-	_mesh_child(_elbow_r, _cyl(0.048, 0.26), skin_mat, Vector3(0, -0.13, 0))
+	_mesh_child(_elbow_r, _cyl(0.046, 0.26), skin_mat, Vector3(0, -0.13, 0))
 	_mesh_child(_elbow_r, _sphere(0.085 if gk else 0.052), glove_mat if gk else skin_mat, Vector3(0, -0.29, 0))
 
 	_thigh_l = _joint(_pelvis, Vector3(-0.11, -0.04, 0))
-	_mesh_child(_thigh_l, _cyl(0.085, 0.45), skin_mat, Vector3(0, -0.225, 0))
+	_mesh_child(_thigh_l, _cyl(0.088, 0.45), skin_mat, Vector3(0, -0.225, 0))
 	_knee_l = _joint(_thigh_l, Vector3(0, -0.45, 0))
 	_mesh_child(_knee_l, _cyl(0.07, 0.42), sock_mat, Vector3(0, -0.21, 0))
-	_mesh_child(_knee_l, _box(Vector3(0.1, 0.07, 0.25)), boot_mat, Vector3(0, -0.41, -0.06))
+	var boot_l := _mesh_child(_knee_l, _capsule(0.055, 0.26), boot_mat, Vector3(0, -0.41, -0.05))
+	boot_l.rotation_degrees = Vector3(90, 0, 0)
 	_thigh_r = _joint(_pelvis, Vector3(0.11, -0.04, 0))
-	_mesh_child(_thigh_r, _cyl(0.085, 0.45), skin_mat, Vector3(0, -0.225, 0))
+	_mesh_child(_thigh_r, _cyl(0.088, 0.45), skin_mat, Vector3(0, -0.225, 0))
 	_knee_r = _joint(_thigh_r, Vector3(0, -0.45, 0))
 	_mesh_child(_knee_r, _cyl(0.07, 0.42), sock_mat, Vector3(0, -0.21, 0))
-	_mesh_child(_knee_r, _box(Vector3(0.1, 0.07, 0.25)), boot_mat, Vector3(0, -0.41, -0.06))
-
-	# Franja del uniforme para dar lectura de equipo desde lejos
-	var band := _mesh_child(_torso, _cyl(0.24, 0.07), trim_mat, Vector3(0, 0.5, 0))
-	band.scale = Vector3(1.0, 1.0, 0.72)
+	var boot_r := _mesh_child(_knee_r, _capsule(0.055, 0.26), boot_mat, Vector3(0, -0.41, -0.05))
+	boot_r.rotation_degrees = Vector3(90, 0, 0)
 
 	var num := Label3D.new()
 	num.text = str(number)
@@ -1715,10 +1730,18 @@ func _build_visual() -> void:
 	_aura = Node3D.new()
 	add_child(_aura)
 	var aura_mi := MeshInstance3D.new()
-	aura_mi.mesh = _capsule(0.62, 2.3)
+	var aura_cyl := CylinderMesh.new()
+	aura_cyl.top_radius = 0.35
+	aura_cyl.bottom_radius = 0.75
+	aura_cyl.height = 2.6
+	aura_cyl.cap_top = false
+	aura_cyl.cap_bottom = false
+	aura_mi.mesh = aura_cyl
 	_aura_mat = _fx_mat(Color(0.3, 0.6, 1.0, 0.2))
-	aura_mi.material_override = _aura_mat
-	aura_mi.position.y = 1.0
+	_aura_flame = ShaderMaterial.new()
+	_aura_flame.shader = load("res://shaders/aura.gdshader")
+	aura_mi.material_override = _aura_flame
+	aura_mi.position.y = 1.2
 	aura_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	aura_mi.set_meta("no_ghost", true)
 	_aura.add_child(aura_mi)
@@ -2092,11 +2115,101 @@ func _apply_pose(t: Dictionary, rate: float, dt: float) -> void:
 	_elbow_r.rotation.x = _pose["elbow_r"]
 
 
-func _mat(c: Color) -> StandardMaterial3D:
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = c
-	mat.roughness = 0.75
+static var _toon_cache := {}
+static var _outline_mat: ShaderMaterial
+
+
+## Material anime (toon + contorno). Se reutiliza por color.
+func _mat(c: Color) -> ShaderMaterial:
+	var key := c.to_html()
+	if _toon_cache.has(key):
+		return _toon_cache[key]
+	if _outline_mat == null:
+		_outline_mat = ShaderMaterial.new()
+		_outline_mat.shader = load("res://shaders/outline.gdshader")
+	var mat := ShaderMaterial.new()
+	mat.shader = load("res://shaders/toon.gdshader")
+	mat.set_shader_parameter("albedo", c)
+	# Sombra tintada hacia el azul/violeta, como en el anime
+	mat.set_shader_parameter("shade_color", c.lerp(Color(0.35, 0.4, 0.75), 0.45))
+	mat.set_shader_parameter("spec_strength", 0.12)
+	mat.next_pass = _outline_mat
+	_toon_cache[key] = mat
 	return mat
+
+
+func _flat(c: Color) -> StandardMaterial3D:
+	var m2 := StandardMaterial3D.new()
+	m2.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m2.albedo_color = c
+	return m2
+
+
+## Cabeza anime: ojos grandes con brillo, cejas, boca y pelo en puntas.
+func _build_anime_head(skin_mat: Material, hair_mat: Material, eye_col: Color, rng: RandomNumberGenerator) -> void:
+	var face := _mesh_child(_head, _sphere(0.125), skin_mat, Vector3(0, 0.12, 0))
+	face.scale = Vector3(0.95, 1.08, 1.0)
+	# Ojos (hacia -Z)
+	var white := _flat(Color(1, 1, 1))
+	var iris := _flat(eye_col)
+	var pupil := _flat(Color(0.03, 0.03, 0.05))
+	var brow := _flat(Color(0.08, 0.06, 0.05))
+	for sx in [-1.0, 1.0]:
+		var e := _mesh_child(_head, _sphere(0.032), white, Vector3(0.048 * sx, 0.125, -0.108))
+		e.scale = Vector3(1.0, 1.25, 0.35)
+		e.set_meta("no_ghost", true)
+		var ir := _mesh_child(_head, _sphere(0.024), iris, Vector3(0.048 * sx, 0.12, -0.118))
+		ir.scale = Vector3(0.95, 1.3, 0.3)
+		ir.set_meta("no_ghost", true)
+		var pu := _mesh_child(_head, _sphere(0.012), pupil, Vector3(0.048 * sx, 0.118, -0.124))
+		pu.scale = Vector3(1.0, 1.3, 0.3)
+		pu.set_meta("no_ghost", true)
+		var hl := _mesh_child(_head, _sphere(0.007), white, Vector3(0.056 * sx, 0.132, -0.127))
+		hl.set_meta("no_ghost", true)
+		var b := _mesh_child(_head, _box(Vector3(0.055, 0.01, 0.01)), brow, Vector3(0.05 * sx, 0.17, -0.112))
+		b.rotation_degrees = Vector3(0, 0, -12.0 * sx)
+		b.set_meta("no_ghost", true)
+	var mouth := _mesh_child(_head, _box(Vector3(0.035, 0.006, 0.006)), brow, Vector3(0, 0.055, -0.118))
+	mouth.set_meta("no_ghost", true)
+	# Pelo: casquete + mechones en punta hacia atrás/arriba + flequillo
+	var cap := _mesh_child(_head, _sphere(0.138), hair_mat, Vector3(0, 0.17, 0.02))
+	cap.scale = Vector3(1.0, 0.78, 1.05)
+	# Mechones en dos capas, inclinados hacia atrás (estilo shōnen)
+	var length := rng.randf_range(0.11, 0.19)
+	var spiky := rng.randf()
+	for layer in 2:
+		var count := 7 + layer * 3
+		for i in count:
+			var ang := lerpf(-2.3, 2.3, float(i) / float(count - 1)) + rng.randf_range(-0.12, 0.12)
+			var up := 0.25 + layer * 0.35 + rng.randf() * 0.2 + spiky * 0.2
+			var dir := Vector3(sin(ang) * 0.85, up, cos(ang) * 0.55 + 0.75).normalized()
+			var cone := CylinderMesh.new()
+			cone.top_radius = 0.0
+			cone.bottom_radius = rng.randf_range(0.035, 0.05)
+			cone.height = length * rng.randf_range(0.75, 1.25) * (1.0 + layer * 0.15)
+			cone.radial_segments = 5
+			var base := Vector3(0, 0.19 + layer * 0.03, 0.02) + Vector3(sin(ang) * 0.11, 0.0, cos(ang) * 0.09)
+			var mi := _mesh_child(_head, cone, hair_mat, base + dir * cone.height * 0.4)
+			mi.basis = Basis(Quaternion(Vector3.UP, dir))
+	for i in 4:
+		# Flequillo cayendo sobre la frente
+		var cone2 := CylinderMesh.new()
+		cone2.top_radius = 0.0
+		cone2.bottom_radius = 0.035
+		cone2.height = rng.randf_range(0.1, 0.16)
+		cone2.radial_segments = 4
+		var x := (float(i) - 1.5) * 0.045
+		var mi2 := _mesh_child(_head, cone2, hair_mat, Vector3(x, 0.2, -0.1))
+		mi2.rotation_degrees = Vector3(-200 + rng.randf_range(-10, 10), 0, x * 200.0)
+
+
+func _torus(inner: float, outer: float) -> TorusMesh:
+	var t := TorusMesh.new()
+	t.inner_radius = inner
+	t.outer_radius = outer
+	t.rings = 12
+	t.ring_segments = 6
+	return t
 
 
 func _fx_mat(c: Color) -> StandardMaterial3D:
