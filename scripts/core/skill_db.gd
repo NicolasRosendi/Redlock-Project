@@ -10,10 +10,12 @@ const MAX_ENERGY := BAR * MAX_BARS
 const AWAKEN_DURATION := 20.0
 
 ## Ganancia de energía por acción.
+## (100 = 1 barra). Gol, asistencia y regates son las acciones que más dan.
 const GAIN := {
-	"pass": 10.0, "through": 16.0, "shot_on_target": 18.0, "goal": 60.0, "assist": 25.0,
-	"tackle": 25.0, "interception": 25.0, "dribble": 20.0, "feint": 5.0, "save": 30.0,
-	"block": 15.0, "header": 8.0, "touch": 2.0, "poke": 18.0,
+	"pass": 10.0, "through": 16.0, "shot_on_target": 20.0, "goal": 160.0, "assist": 90.0,
+	"team_goal": 20.0, "tackle": 25.0, "interception": 25.0, "dribble": 40.0, "dribble_skill": 55.0,
+	"evade": 30.0, "resist": 15.0, "feint": 8.0, "save": 30.0, "block": 15.0, "header": 8.0,
+	"touch": 2.0, "poke": 18.0,
 }
 
 const KIND_NAMES := {"pass": "Pase", "shot": "Tiro", "dribble": "Regate", "tackle": "Defensa", "awaken": "Transformación"}

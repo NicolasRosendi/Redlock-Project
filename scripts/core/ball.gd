@@ -55,6 +55,7 @@ var _trail_t := 0.0
 var _trail_on := false
 var _trail_color := Color.WHITE
 var _touch_cd := 0.0
+var _carry_u := 0.0
 
 
 func _ready() -> void:
@@ -226,10 +227,12 @@ func set_carrier(p: Player, cushion := false) -> void:
 		var bv := Vector3(velocity.x, 0.0, velocity.z)
 		var keep := clampf(0.14 + maxf(bv.length() - 12.0, 0.0) * 0.015 - p.st("dribble") * 0.08, 0.04, 0.35)
 		carry_vel = pv + (bv - pv) * keep
+		_carry_u = maxf(carry_vel.dot(p.facing), 0.0)
 		_touch_cd = 0.22
 		p.on_receive()
 	else:
 		carry_vel = pv
+		_carry_u = maxf(pv.dot(p.facing), 0.0)
 		_touch_cd = 0.0
 	carrier = p
 	velocity = carry_vel
@@ -251,8 +254,7 @@ func set_carrier(p: Player, cushion := false) -> void:
 ## Obliga a un toque inmediato (al empezar un regate, por ejemplo).
 func force_touch() -> void:
 	_touch_cd = 0.0
-	if carrier != null:
-		_touch(carrier, Vector3(carrier.velocity.x, 0, carrier.velocity.z), carrier.skill_dir_or_facing())
+	_carry_u = 0.0
 
 
 func place(pos: Vector3) -> void:
@@ -276,15 +278,19 @@ func set_trail(on: bool, color := Color.WHITE) -> void:
 	_trail_color = color
 
 
-## Conducción por toques: el portador empuja el balón, que rueda y frena por
-## su cuenta hasta que el jugador lo alcanza y lo vuelve a tocar. Al esprintar
-## los toques son más largos (más fácil de robar); al proteger, frenar o armar
-## un tiro, el balón se queda al pie. El portero lo lleva en las manos.
+## Conducción por toques "pegada al pie": el balón se mueve sobre el eje
+## hacia donde mira el jugador. Cada toque lo adelanta un poco; frena solo
+## y el jugador lo vuelve a tocar. Si el jugador gira, el balón se recoloca
+## rápido delante de él (nunca se va hacia un lado imprevisible). Al esprintar
+## los toques son algo más largos; al proteger, frenar o armar un tiro, el
+## balón vuelve al pie. El portero lo lleva en las manos.
 func carry(dt: float) -> void:
 	var p := carrier
 	var pv := Vector3(p.velocity.x, 0.0, p.velocity.z)
 	var spd := pv.length()
 	var fwd := p.skill_dir_or_facing()
+	var right := fwd.cross(Vector3.UP)
+	var old := position
 	_touch_cd -= dt
 	if position.y > RADIUS:
 		position.y = maxf(position.y - 4.0 * dt, RADIUS)
@@ -294,58 +300,70 @@ func carry(dt: float) -> void:
 		carry_vel = pv
 		velocity = carry_vel
 		return
-	var hold := p.state == Player.State.KICK or p.restart_lock or p.want_shield or spd < 0.8
+	var s := pv.dot(fwd)
+	# En un giro brusco el jugador recoge el balón al pie y lo lleva consigo
+	var md := Vector3(p.move_dir.x, 0.0, p.move_dir.z)
+	var turning := md.length() > 0.3 and fwd.angle_to(md) > 1.0
+	var hold := p.state == Player.State.KICK or p.restart_lock or p.want_shield or spd < 0.8 or turning
 	if hold:
 		var target := p.position + fwd * 0.42
+		if turning:
+			var blend := fwd + md.normalized()
+			target = p.position + (blend.normalized() if blend.length() > 0.5 else fwd) * 0.45
 		if p.want_shield:
 			var o := p.nearest_opponent()
 			if o != null:
 				var away := p.flat_to(p.position * 2.0 - o.position).normalized()
 				target = p.position + (away * 0.7 + fwd * 0.3).normalized() * 0.5
-		var k := 1.0 - exp(-12.0 * dt)
-		position.x = lerpf(position.x, target.x, k)
-		position.z = lerpf(position.z, target.z, k)
-		carry_vel = pv
+		# Rodea el cuerpo del jugador en vez de atravesarlo
+		var cur := Vector3(position.x - p.position.x, 0.0, position.z - p.position.z)
+		var want := Vector3(target.x - p.position.x, 0.0, target.z - p.position.z)
+		var k := 1.0 - exp(-14.0 * dt)
+		var ang := cur.signed_angle_to(want, Vector3.UP) if cur.length() > 0.05 else 0.0
+		var dir := cur.normalized().rotated(Vector3.UP, ang * k) if cur.length() > 0.05 else want.normalized()
+		var rad := lerpf(cur.length(), want.length(), k)
+		position.x = p.position.x + dir.x * rad
+		position.z = p.position.z + dir.z * rad
+		_carry_u = maxf(s, 0.0)
 	else:
-		var sp := carry_vel.length()
-		if sp > 0.0:
-			carry_vel *= maxf(sp - (CARRY_DECEL + ROLL_DRAG * sp) * dt, 0.0) / sp
-		position += carry_vel * dt
 		var rel := Vector3(position.x - p.position.x, 0.0, position.z - p.position.z)
-		var right := fwd.cross(Vector3.UP)
 		var along := rel.dot(fwd)
 		var lat := rel.dot(right)
-		if _touch_cd <= 0.0 and (along < 0.4 or absf(lat) > 0.32 or rel.length() > 2.3):
-			_touch(p, pv, fwd)
-	var rel2 := Vector3(position.x - p.position.x, 0.0, position.z - p.position.z)
-	if rel2.length() > 2.6:
-		var fixed := p.position + rel2.normalized() * 2.6
-		position.x = fixed.x
-		position.z = fixed.z
+		_carry_u = maxf(_carry_u - (CARRY_DECEL + ROLL_DRAG * _carry_u) * dt, 0.0)
+		# `rel` ya incluye cuánto avanzó el jugador: solo se suma lo que rodó el balón
+		along += _carry_u * dt
+		# El balón vuelve al eje del jugador enseguida (más rápido con el humano)
+		lat *= exp(-(16.0 if p.is_human else 10.0) * dt)
+		if _touch_cd <= 0.0 and along < 0.38:
+			var reach := carry_reach(p, spd)
+			_carry_u = maxf(s, 0.0) + sqrt(2.0 * CARRY_DECEL * maxf(reach - maxf(along, 0.0), 0.05))
+			_touch_cd = 0.12
+			p.on_ball_touch()
+		along = clampf(along, -0.3, carry_reach(p, spd) + 0.2)
+		var np := p.position + fwd * along + right * lat
+		position.x = np.x
+		position.z = np.z
+	if dt > 0.0:
+		carry_vel = Vector3(position.x - old.x, 0.0, position.z - old.z) / dt
 	velocity = carry_vel
 
 
-func _touch(p: Player, pv: Vector3, fwd: Vector3) -> void:
-	var spd := pv.length()
-	var reach := 0.6 + spd * 0.04
+## Distancia máxima a la que se adelanta el balón en cada toque.
+func carry_reach(p: Player, spd: float) -> float:
+	var reach := 0.5 + spd * 0.03
 	if p.want_sprint and spd > 6.0:
-		reach += 0.4 + spd * 0.06 * (1.15 - p.st("dribble") * 0.5)
-	# Tiempo hasta que el jugador alcance el balón: la ventaja máxima del
-	# balón (a mitad de camino) coincide con `reach`.
-	var t := clampf(sqrt(8.0 * maxf(reach - 0.4, 0.05) / CARRY_DECEL), 0.3, 1.4)
-	var meet := p.position + pv * t + fwd * 0.45
-	var s := Vector3(meet.x - position.x, 0.0, meet.z - position.z)
-	var v0 := (s.length() + 0.5 * CARRY_DECEL * t * t) / t
-	carry_vel = s.normalized() * v0 if s.length() > 0.01 else pv
-	_touch_cd = 0.14
-	p.on_ball_touch()
+		reach += 0.2 + spd * 0.035 * (1.15 - p.st("dribble") * 0.5)
+	if p.is_human:
+		reach *= 0.85
+	return reach
 
 
-## Postes, travesaño y red (marca in_goal cuando el balón entra).
+## Postes, travesaño y red. El gol solo cuenta cuando el balón cruzó
+## ENTERO la línea; si pega en el palo rebota según cómo llegó.
 func collide_goal(sign_x: float, hl: float, gw: float, gh: float, depth: float) -> void:
 	var gx := sign_x * hl
 	var r := RADIUS + POST_RADIUS
-	# Postes
+	# Postes (cilindros verticales)
 	for pz in [-gw * 0.5, gw * 0.5]:
 		if position.y < gh + RADIUS:
 			var d := Vector2(position.x - gx, position.z - pz)
@@ -353,22 +371,23 @@ func collide_goal(sign_x: float, hl: float, gw: float, gh: float, depth: float) 
 			if dl < r and dl > 0.0001:
 				var n := Vector3(d.x / dl, 0.0, d.y / dl)
 				position += n * (r - dl)
-				_reflect(n, 0.65)
+				_reflect(n, 0.7)
 				m.on_woodwork()
-	# Travesaño
-	if absf(position.z) <= gw * 0.5:
+	# Travesaño (cilindro horizontal)
+	if absf(position.z) <= gw * 0.5 + RADIUS:
 		var d2 := Vector2(position.x - gx, position.y - gh)
 		var dl2 := d2.length()
 		if dl2 < r and dl2 > 0.0001:
 			var n2 := Vector3(d2.x / dl2, d2.y / dl2, 0.0)
 			position += n2 * (r - dl2)
-			_reflect(n2, 0.6)
+			_reflect(n2, 0.65)
 			m.on_woodwork()
-	# Red: una vez dentro, el balón queda atrapado y pierde energía
-	var inside := absf(position.x) > hl and signf(position.x) == sign_x \
+	var crossed := absf(position.x) > hl + RADIUS and signf(position.x) == sign_x \
 		and absf(position.z) < gw * 0.5 and position.y < gh
-	if inside or (in_goal and signf(position.x) == sign_x):
+	if crossed:
 		in_goal = true
+	# Red: solo una vez que es gol (el balón queda dentro y pierde energía)
+	if in_goal and signf(position.x) == sign_x:
 		var back := hl + depth - RADIUS
 		if absf(position.x) > back:
 			position.x = sign_x * back
@@ -380,18 +399,21 @@ func collide_goal(sign_x: float, hl: float, gw: float, gh: float, depth: float) 
 		if position.y > gh - RADIUS:
 			position.y = gh - RADIUS
 			velocity.y *= -0.2
-		if absf(position.x) < hl + RADIUS and absf(position.x) > hl - 0.3:
-			# Que no vuelva a salir por la línea de gol
+		if absf(position.x) < hl + RADIUS:
 			position.x = sign_x * (hl + RADIUS)
 			velocity.x = absf(velocity.x) * sign_x * 0.2
 		velocity *= 0.985
 
 
+## Rebote: la componente normal se invierte (con pérdida) y la tangencial se
+## conserva casi entera, así que el balón sale según el ángulo con que llegó.
 func _reflect(n: Vector3, e: float) -> void:
 	var vn := velocity.dot(n)
 	if vn < 0.0:
-		velocity -= (1.0 + e) * vn * n
-		side_spin *= 0.4
+		var vt := velocity - vn * n
+		velocity = vt * 0.9 - vn * e * n
+		side_spin *= 0.3
+		top_spin *= 0.3
 
 
 func _process(delta: float) -> void:

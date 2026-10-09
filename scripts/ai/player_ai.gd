@@ -163,17 +163,19 @@ func _press() -> void:
 	if decide_t > 0.0 or not p.can_act():
 		return
 	decide_t = m.ai_reaction(p.team) * randf_range(0.8, 1.4)
-	if d < 1.45:
+	# La IA anuncia el quite un instante antes ("!" rojo) para poder reaccionar
+	var tele := m.ai_telegraph(p.team)
+	if d < 1.8:
 		var r := randf()
 		var rate := m.ai_tackle_rate(p.team)
 		if r < rate * 0.65:
-			p.do_tackle()
+			p.prepare_tackle("tackle", tele)
 		elif r < rate:
-			p.do_poke()
+			p.prepare_tackle("poke", tele)
 		elif r < rate + 0.1:
-			p.do_shoulder()
-	elif d < 3.0 and d > 1.6 and c.speed_h() > 5.0 and randf() < 0.07:
-		p.do_slide()
+			p.prepare_tackle("shoulder", tele)
+	elif d < 3.2 and d > 1.8 and c.speed_h() > 5.0 and randf() < 0.07:
+		p.prepare_tackle("slide", tele)
 	elif d > 3.0 and d < 9.0 and p.energy >= SkillDB.BAR and p.team.opponent.progress(c.position.x) > 0.65 \
 			and randf() < 0.05 + 0.04 * m.ai_level(p.team):
 		p.try_special("quite_relampago")

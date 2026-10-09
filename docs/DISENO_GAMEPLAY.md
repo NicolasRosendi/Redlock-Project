@@ -18,7 +18,7 @@ Documento vivo. Resume las decisiones del prototipo y lo que viene después.
 |---|---|---|
 | Rango | 0–100 con **tope** que baja con el cansancio | 5 barras × 100 |
 | Se gasta en | Correr (6/s), presionar, marcar, quites (5), barridas (10), cargas (7), saltos (5), regates (5/9) | Técnicas R2 (1–3 barras) |
-| Se recupera | Al no correr (4/s trotando, 7/s quieto) solo hasta el tope | Pase completado 10, al hueco 16, tiro al arco 18, quite 25, intercepción 25, regate exitoso 20, atajada 30, gol 60, asistencia 25, amague 5 |
+| Se recupera | Al no correr (4/s trotando, 7/s quieto) solo hasta el tope | Gol 160 (+20 al resto del equipo), asistencia 90, regate que supera al rival 40 (con L2: 55), esquivar un quite 30, atajada 30, quite/intercepción 25, tiro al arco 20, meter el pie 18, pase al hueco 16, resistir un quite 15, pase 10, amague 8 |
 | Efecto | <12: más lento y sin sprint | — |
 
 El tope baja un 12 % de lo gastado (escalado según la duración del partido) y nunca baja de 40.
@@ -54,11 +54,20 @@ El tope baja un 12 % de lo gastado (escalado según la duración del partido) y 
 
 ## Conducción y recepción
 
-El balón conducido rueda con frenado propio entre toques: en cada toque se calcula una velocidad para que el balón se adelante
-hasta una distancia máxima (≈0,8 m al trote, ≈1,8 m esprintando) y el jugador lo alcance justo a sus pies. Si el jugador gira,
-se para o el balón se le va de lado, toca otra vez. Al proteger, frenar o armar un tiro, el balón vuelve al pie. Las recepciones
+El balón conducido se mueve sobre el eje hacia donde mira el jugador: en cada toque se adelanta hasta una distancia máxima
+(≈0,6 m al trote, ≈1 m esprintando para el humano; algo más para la IA), frena y el jugador lo vuelve a tocar. Cualquier
+desvío lateral vuelve al eje enseguida, así que el balón nunca se va hacia un lado imprevisible. Con balón, el cuerpo gira
+hacia donde apunta el stick; en giros de más de ~57° el jugador recoge el balón al pie y lo rodea con el cuerpo. Al proteger, frenar o armar un tiro, el balón vuelve al pie. Las recepciones
 conservan entre el 4 % y el 35 % de la velocidad relativa del pase (primer toque) y el receptor humano camina solo hacia el
 pase si no tocas el stick. El portero lleva el balón en las manos dentro de su área.
+
+## Duelos: leer lo que pasa
+
+- La IA anuncia cada intento de quite con un **"!" rojo** (0,28/0,20/0,14 s según dificultad) antes de lanzarse, y cancela si
+  el rival ya se escapó.
+- Esquivar (ventana de evasión de regates/amagues/técnicas): salto corto con estela, "¡ESQUIVA!" y el defensor queda
+  descolocado 0,4 s. Aguantar un quite fallido: "¡RESISTE!". Perder el duelo: el jugador cae al suelo.
+- Los avisos sobre la jugada se ordenan en renglones (máximo 3 a la vez) para no pisarse.
 
 ## Acciones sin balón
 

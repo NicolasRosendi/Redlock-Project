@@ -87,6 +87,11 @@ var fallen := false
 var arm_target: Player = null
 var arm_time := 0.0
 var _arm_resolved := false
+## Aviso previo de la IA antes de entrar al quite ("!" rojo): da tiempo a regatear.
+var _tele := {}
+var _alert: Label3D
+var _flick_anim := 0.0
+var skill_flash := {}
 
 # Visual
 var _root: Node3D
@@ -276,9 +281,14 @@ func spend_stamina(a: float) -> void:
 	stamina_cap = maxf(stamina_cap - a * m.fatigue_rate, 40.0)
 
 
-func gain_energy(a: float) -> void:
+## `label`: texto del aviso que acompaña a la energía ganada (p. ej. "¡REGATE!").
+func gain_energy(a: float, label := "") -> void:
 	var before := int(energy / SkillDB.BAR)
 	energy = minf(energy + a, SkillDB.MAX_ENERGY)
+	if label != "":
+		FX.popup(position, "%s +%d" % [label, int(a)] if is_human else label, team.color.lightened(0.5), 0.8)
+	elif is_human and a >= 25.0:
+		FX.popup(position, "+%d ENERGÍA" % int(a), Color(0.45, 0.9, 1.0), 0.55)
 	if int(energy / SkillDB.BAR) > before:
 		m.on_energy_bar(self)
 
@@ -347,6 +357,7 @@ func tick(dt: float) -> void:
 		State.NORMAL:
 			_move_normal(dt)
 			_arm_hold(dt)
+			_telegraph_tick()
 		State.KICK:
 			velocity = velocity.move_toward(Vector3.ZERO, 18.0 * dt)
 			if not pending.is_empty() and not pending.get("done", false) and state_time >= float(pending.get("windup", 0.0)):
@@ -465,6 +476,9 @@ func _move_normal(dt: float) -> void:
 		var lt := flat_to(look_target)
 		if lt.length() > 0.2:
 			face = lt.normalized()
+	elif has_ball() and md.length() > 0.3:
+		# Con balón el cuerpo gira hacia donde apunta el stick (y el balón con él)
+		face = md.normalized()
 	elif velocity.length() > 0.6:
 		face = Vector3(velocity.x, 0.0, velocity.z).normalized()
 	var turn_rate := 11.0
@@ -890,16 +904,18 @@ func _kick_shot(kind: String, charge: float, opts: Dictionary) -> void:
 func do_tackle() -> void:
 	if not can_act() or has_ball():
 		return
+	m.stats["tackle_attempts"] += 1
 	_face_ball_if_near(3.5)
 	_set_state(State.TACKLE, 0.42)
 	tackle_done = false
 	spend_stamina(5.0)
-	velocity = facing * maxf(speed_h(), 5.5)
+	velocity = facing * maxf(speed_h(), 6.5)
 
 
 func do_slide() -> void:
 	if not can_act() or has_ball():
 		return
+	m.stats["tackle_attempts"] += 1
 	_face_ball_if_near(8.0)
 	_set_state(State.SLIDE, 0.85)
 	tackle_done = false
@@ -912,6 +928,7 @@ func do_slide() -> void:
 func do_poke() -> void:
 	if not can_act() or has_ball():
 		return
+	m.stats["tackle_attempts"] += 1
 	_face_ball_if_near(3.0)
 	_set_state(State.POKE, 0.28)
 	tackle_done = false
@@ -929,8 +946,53 @@ func do_shoulder() -> void:
 	velocity += facing * 2.0
 
 
+## La IA anuncia el quite un instante antes (aparece "!" sobre su cabeza).
+func prepare_tackle(kind: String, delay: float) -> void:
+	if not can_act() or has_ball() or not _tele.is_empty():
+		return
+	_tele = {"kind": kind, "until": m.time + delay}
+	_face_ball_if_near(4.0)
+
+
+func _telegraph_tick() -> void:
+	if _tele.is_empty() or m.time < float(_tele["until"]):
+		return
+	var kind: String = _tele["kind"]
+	_tele = {}
+	# Si el rival ya se escapó durante el aviso, no se tira al vacío
+	var limit := 4.0 if kind == "slide" else 2.4
+	if Match.flat_dist(m.ball.position, position) > limit:
+		return
+	match kind:
+		"tackle":
+			do_tackle()
+		"poke":
+			do_poke()
+		"shoulder":
+			do_shoulder()
+		"slide":
+			do_slide()
+
+
+## Reacción del regateador cuando esquiva un intento de quite: salto corto,
+## estela y aviso; quien intentó el quite queda descolocado.
+func _on_evaded(by: Player) -> void:
+	if height <= 0.01:
+		y_vel = 3.2
+	FX.afterimage(self, team.color.lightened(0.5), 0.35)
+	FX.hitstop(0.05)
+	gain_energy(SkillDB.GAIN["evade"], "¡ESQUIVA!")
+	m.stats["evades"] += 1
+	if by.state != State.SLIDE:
+		by.stun(0.4, false)
+
+
+## Mira hacia donde ESTARÁ el balón (el portador sigue corriendo).
 func _face_ball_if_near(r: float) -> void:
-	var to := flat_to(m.ball.position)
+	var lead := m.ball.position
+	if m.ball.carrier != null and m.ball.carrier != self:
+		lead += Vector3(m.ball.carrier.velocity.x, 0.0, m.ball.carrier.velocity.z) * 0.18
+	var to := flat_to(lead)
 	if to.length() < r and to.length() > 0.05:
 		facing = to.normalized()
 
@@ -967,8 +1029,7 @@ func _tackle_contact(reach: float, slide: bool) -> void:
 		return
 	if c.is_evading():
 		m.notify("¡%s lo esquiva!" % c.player_name, c.team.color.lightened(0.3))
-		FX.popup(c.position, "¡ESQUIVA!", c.team.color.lightened(0.5), 0.8)
-		c.gain_energy(10.0)
+		c._on_evaded(self)
 		return
 	var p := 0.48 + (st("tackle") - c.st("dribble")) * 0.6 + (st("strength") - c.st("strength")) * 0.15
 	if c.want_shield:
@@ -992,9 +1053,12 @@ func _tackle_contact(reach: float, slide: bool) -> void:
 			b.kick(self, facing * 6.0 + lat + Vector3.UP * 0.8, "tackle")
 		_won_ball_fx("¡BARRIDA!" if slide else "¡QUITE!")
 	else:
-		c.gain_energy(6.0)
-		if slide:
-			FX.popup(position, "fallo", Color(0.8, 0.8, 0.8), 0.6)
+		# El regateador aguanta el intento
+		c.gain_energy(SkillDB.GAIN["resist"])
+		m.stats["resists"] += 1
+		FX.popup(c.position, "¡RESISTE!", c.team.color.lightened(0.5), 0.75)
+		if not slide:
+			stun(0.25, false)
 
 
 func _poke_contact() -> void:
@@ -1013,8 +1077,7 @@ func _poke_contact() -> void:
 		b.kick(self, facing * 5.0 + lat, "tackle")
 		return
 	if c.is_evading():
-		FX.popup(c.position, "¡ESQUIVA!", c.team.color.lightened(0.5), 0.8)
-		c.gain_energy(8.0)
+		c._on_evaded(self)
 		return
 	var ball_far := Match.flat_dist(b.position, c.position) > 0.8
 	var p := 0.55 + (st("tackle") - c.st("dribble")) * 0.5 + (0.12 if ball_far else 0.0) - (0.2 if c.want_shield else 0.0)
@@ -1028,6 +1091,9 @@ func _poke_contact() -> void:
 		FX.popup(position, "¡LE METE EL PIE!", team.color.lightened(0.45), 0.85)
 		FX.burst(b.position + Vector3.UP * 0.2, Color(1, 1, 1), 12, 4.0, 0.35)
 		FX.hitstop(0.05)
+	else:
+		c.gain_energy(SkillDB.GAIN["resist"])
+		FX.popup(c.position, "¡RESISTE!", c.team.color.lightened(0.5), 0.7)
 
 
 ## Agarrar con el brazo (mantener Cuadrado al lado o detrás del rival): lo
@@ -1073,6 +1139,9 @@ func _shoulder_contact() -> void:
 		return
 	if Match.flat_dist(c.position, position) > 1.7:
 		return
+	if c.is_evading():
+		c._on_evaded(self)
+		return
 	var mine := st("strength") + stamina / 250.0 + randf() * 0.35
 	var theirs := c.st("strength") + c.stamina / 250.0 + randf() * 0.35 + (0.2 if c.want_shield else 0.0)
 	if mine > theirs:
@@ -1094,6 +1163,7 @@ func _shoulder_contact() -> void:
 func stun(t: float, fall := false) -> void:
 	charge_kind = ""
 	pending = {}
+	_tele = {}
 	arm_target = null
 	if has_ball():
 		m.ball.kick(self, velocity * 0.5, "drop")
@@ -1187,17 +1257,22 @@ func do_dribble_flick(wdir: Vector3, enhanced: bool) -> void:
 	if opp != null and Match.flat_dist(opp.position, position) < 3.5:
 		dribble_check = {"until": m.time + 1.0, "opp": opp}
 	var b := m.ball
+	if opp != null and Match.flat_dist(opp.position, position) < 3.5:
+		dribble_check["skill"] = enhanced
 	match kind:
 		"toque_largo":
 			b.kick(self, fwd * (10.0 + st("speed") * 3.0), "knock")
 			no_touch_until = m.time + 0.12
 			burst_until = m.time + 0.9
+			_flick_anim = 0.22
+			_kick_was_header = false
 		"sombrero":
 			var tgt := position + fwd * 5.0
 			b.kick(self, Kick.lob(b.position, tgt, 2.7, Ball.RADIUS), "knock")
 			no_touch_until = m.time + 0.35
 			evade_until = m.time + 0.7
 			burst_until = m.time + 1.0
+			_flick_anim = 0.3
 		"recorte":
 			_start_skill(lateral, 1.7, 0.26, 0.3, lateral)
 		"elastico":
@@ -1209,8 +1284,16 @@ func do_dribble_flick(wdir: Vector3, enhanced: bool) -> void:
 			var dir := (lateral * 0.8 + fwd * 0.6).normalized()
 			_start_skill(dir, 2.2, 0.5, 0.55, dir)
 			skill["spin"] = true
+	if state == State.SKILL:
+		skill["kind"] = kind
+		skill["ghost"] = enhanced
+		skill["color"] = Color(1.0, 0.85, 0.4)
+	skill_flash = {"kind": kind, "t": 0.0}
 	gain_energy(3.0)
-	m.notify(SkillDB.SKILL_MOVE_NAMES[kind], Color(0.9, 0.9, 1.0) if not enhanced else Color(1.0, 0.85, 0.4))
+	var col := Color(0.9, 0.92, 1.0) if not enhanced else Color(1.0, 0.85, 0.4)
+	m.notify(SkillDB.SKILL_MOVE_NAMES[kind], col)
+	FX.popup(position, SkillDB.SKILL_MOVE_NAMES[kind].to_upper(), col, 0.55 if not enhanced else 0.7)
+	FX.afterimage(self, col, 0.3)
 	m.stats["skill_moves"] += 1
 
 
@@ -1226,12 +1309,12 @@ func _start_skill(dir: Vector3, dist: float, dur: float, evade: float, ball_dir:
 func _dribble_reward() -> void:
 	if dribble_check.is_empty() or m.time < float(dribble_check["until"]):
 		return
+	var was_skill: bool = dribble_check.get("skill", false)
 	dribble_check = {}
 	if team.has_ball() or (m.ball.carrier == null and m.ball.last_touch == self):
-		gain_energy(SkillDB.GAIN["dribble"])
+		gain_energy(SkillDB.GAIN["dribble_skill"] if was_skill else SkillDB.GAIN["dribble"], "¡REGATE!")
 		m.stats["dribbles"] += 1
 		m.notify("¡Regate de %s!" % player_name, team.color.lightened(0.4))
-		FX.popup(position, "¡REGATE!", team.color.lightened(0.5), 0.75)
 
 
 # ---------------------------------------------------------------- especiales
@@ -1593,6 +1676,18 @@ func _build_visual() -> void:
 	_wall_fx.set_meta("no_ghost", true)
 	_wall_fx.visible = false
 	add_child(_wall_fx)
+	_alert = Label3D.new()
+	_alert.text = "!"
+	_alert.font_size = 120
+	_alert.pixel_size = 0.008
+	_alert.outline_size = 24
+	_alert.modulate = Color(1.0, 0.2, 0.15)
+	_alert.outline_modulate = Color(1, 1, 1)
+	_alert.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	_alert.no_depth_test = true
+	_alert.position.y = 2.5
+	_alert.visible = false
+	add_child(_alert)
 	set_human(is_human)
 
 
@@ -1607,6 +1702,8 @@ func set_human(h: bool) -> void:
 ## interpola suavemente hacia ella (sin saltos bruscos entre poses).
 func _animate(dt: float) -> void:
 	_kick_anim = maxf(_kick_anim - dt, 0.0)
+	_flick_anim = maxf(_flick_anim - dt, 0.0)
+	_update_alert()
 	_touch_anim = maxf(_touch_anim - dt, 0.0)
 	_receive_anim = maxf(_receive_anim - dt, 0.0)
 	var spd := speed_h()
@@ -1703,6 +1800,20 @@ func _animate(dt: float) -> void:
 				t["arm_l"] = 0.5
 				t["arm_l_z"] = 0.8
 				t["arm_r_z"] = 0.4
+	if _flick_anim > 0.0 and state == State.NORMAL:
+		# Toque largo: empuje con el empeine · sombrero: taco hacia arriba
+		rate = 36.0
+		var fp := 1.0 - _flick_anim / 0.3
+		if String(skill_flash.get("kind", "")) == "sombrero":
+			t["thigh_r"] = -0.3 - 0.4 * sin(fp * PI)
+			t["knee_r"] = 1.7 * sin(fp * PI)
+			t["torso_x"] = -0.2
+			t["arm_l_z"] = 0.9
+			t["arm_r_z"] = 0.9
+		else:
+			t["thigh_r"] = 0.9 * sin(fp * PI)
+			t["knee_r"] = 0.2
+			t["torso_x"] = -0.3
 	if _kick_anim > 0.0:
 		rate = 40.0
 		var p := 1.0 - _kick_anim / 0.3
@@ -1788,13 +1899,8 @@ func _animate(dt: float) -> void:
 			t["arm_l"] = -1.0
 			t["arm_r"] = -1.0
 		State.SKILL:
-			var sd: Vector3 = skill.get("dir", facing)
-			var side_sign2 := signf(facing.cross(sd).y)
-			t["torso_z"] = 0.3 * side_sign2
-			t["thigh_r_z"] = -0.5 * side_sign2
-			t["thigh_r"] = 0.4
-			t["arm_l_z"] = 0.7
-			t["arm_r_z"] = 0.7
+			_skill_pose(t)
+			rate = 32.0
 		State.CELEBRATE:
 			t["arm_l_z"] = 2.6 + sin(m.time * 10.0) * 0.2
 			t["arm_r_z"] = 2.6 - sin(m.time * 10.0) * 0.2
@@ -1810,6 +1916,75 @@ func _animate(dt: float) -> void:
 		_ring.rotation.y += dt * 2.0
 	if awakened:
 		_aura.scale = Vector3.ONE * (1.0 + sin(m.time * 9.0) * 0.06)
+
+
+## Poses de cada regate, para que se lea qué está pasando.
+func _skill_pose(t: Dictionary) -> void:
+	var kind: String = skill.get("kind", "")
+	var sd: Vector3 = skill.get("dir", facing)
+	var side := signf(facing.cross(sd).y)
+	if side == 0.0:
+		side = 1.0
+	var p := clampf(state_time / maxf(state_dur, 0.01), 0.0, 1.0)
+	t["arm_l_z"] = 0.8
+	t["arm_r_z"] = 0.8
+	t["torso_y"] = 0.0
+	match kind:
+		"recorte":
+			# Amaga hacia un lado y sale hacia el otro con el exterior del pie
+			var feint := p < 0.35
+			t["torso_z"] = (-0.35 if feint else 0.4) * side
+			t["root_z"] = (-0.15 if feint else 0.2) * side
+			if side > 0.0:
+				t["thigh_r"] = 0.45
+				t["thigh_r_z"] = -0.7 * sin(p * PI)
+			else:
+				t["thigh_l"] = 0.45
+				t["thigh_l_z"] = -0.7 * sin(p * PI)
+			t["pelvis_y"] = HIP_Y - 0.08
+		"elastico":
+			# El pie lleva el balón hacia fuera y lo arrastra hacia dentro
+			var sweep := sin(p * TAU) * 0.8
+			if side > 0.0:
+				t["thigh_r"] = 0.4
+				t["thigh_r_z"] = sweep
+			else:
+				t["thigh_l"] = 0.4
+				t["thigh_l_z"] = sweep
+			t["torso_z"] = -sweep * 0.45
+			t["pelvis_y"] = HIP_Y - 0.1
+		"arrastre":
+			# Pisa el balón con la suela y lo trae hacia atrás
+			t["thigh_r"] = lerpf(0.8, -0.2, p)
+			t["knee_r"] = lerpf(0.2, 0.6, p)
+			t["thigh_l"] = -0.1
+			t["knee_l"] = 0.4
+			t["torso_x"] = 0.18
+		"ruleta":
+			t["thigh_r"] = 0.6 * sin(p * TAU)
+			t["thigh_l"] = -0.6 * sin(p * TAU)
+			t["arm_l_z"] = 1.2
+			t["arm_r_z"] = 1.2
+			t["pelvis_y"] = HIP_Y - 0.06
+		_:
+			# Técnicas (relámpago, torbellino...): cuerpo lanzado hacia el lado
+			t["torso_x"] = -0.45
+			t["torso_z"] = 0.35 * side
+			t["arm_l"] = -0.9
+			t["arm_r"] = -0.9
+
+
+## "!" rojo sobre quien está por intentar quitar el balón.
+func _update_alert() -> void:
+	if _alert == null:
+		return
+	var attacking := state == State.TACKLE or state == State.SLIDE or state == State.POKE \
+		or state == State.SHOULDER or state == State.DASH
+	var show := not _tele.is_empty() or (attacking and state_time < 0.3)
+	var c := m.ball.carrier
+	_alert.visible = show and c != null and c.team != team
+	if _alert.visible:
+		_alert.position.y = 2.5 + (0.0 if _tele.is_empty() else sin(m.time * 30.0) * 0.05)
 
 
 func _apply_pose(t: Dictionary, rate: float, dt: float) -> void:

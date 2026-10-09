@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://tests/screenshot_dribble.gd" id="1_drib"]
+
+[node name="ScreenshotDribble" type="Node"]
+script = ExtResource("1_drib")

@@ -120,13 +120,34 @@ func ring(pos: Vector3, color: Color, max_radius := 3.0, life := 0.45) -> void:
 
 ## Texto que aparece sobre la jugada ("¡QUITE!", "¡ATAJADA!") para que se
 ## entienda al instante qué pasó.
+var _popups: Array = []
+
+
 func popup(pos: Vector3, text: String, color: Color, size := 1.0) -> void:
 	if world == null:
 		return
+	# Cada aviso ocupa un "renglón" fijo sobre la jugada; si ya hay 3 cerca,
+	# el más viejo deja su lugar. Así no se pisan los textos.
+	var now := Time.get_ticks_msec()
+	_popups = _popups.filter(func(e: Dictionary) -> bool: return is_instance_valid(e["node"]))
+	var taken := {}
+	var oldest: Dictionary = {}
+	for e in _popups:
+		var ep: Vector3 = e["pos"]
+		if Vector2(ep.x - pos.x, ep.z - pos.z).length() < 3.5:
+			taken[e["slot"]] = e
+			if oldest.is_empty() or int(e["born"]) < int(oldest["born"]):
+				oldest = e
+	var slot := 0
+	while taken.has(slot) and slot < 3:
+		slot += 1
+	if slot >= 3:
+		slot = oldest["slot"]
+		(oldest["node"] as Node).queue_free()
 	var l := Label3D.new()
 	l.text = text
 	l.font_size = 80
-	l.pixel_size = 0.011 * size
+	l.pixel_size = 0.0095 * size
 	l.outline_size = 22
 	l.modulate = color
 	l.outline_modulate = Color(0, 0, 0, 0.9)
@@ -135,14 +156,16 @@ func popup(pos: Vector3, text: String, color: Color, size := 1.0) -> void:
 	l.render_priority = 10
 	l.outline_render_priority = 9
 	world.add_child(l)
-	l.global_position = pos + Vector3.UP * 2.6
+	var base := Vector3(pos.x, 2.5 + slot * 0.8, pos.z)
+	l.global_position = base
 	l.scale = Vector3.ONE * 0.3
+	_popups.append({"node": l, "pos": pos, "born": now, "slot": slot})
 	var tw := l.create_tween()
-	tw.tween_property(l, "scale", Vector3.ONE * 1.15, 0.12).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tw.tween_property(l, "scale", Vector3.ONE * 1.12, 0.1).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	tw.tween_property(l, "scale", Vector3.ONE, 0.08)
-	tw.parallel().tween_property(l, "global_position:y", l.global_position.y + 0.9, 0.9)
-	tw.tween_property(l, "modulate:a", 0.0, 0.3)
-	tw.parallel().tween_property(l, "outline_modulate:a", 0.0, 0.3)
+	tw.tween_interval(0.55)
+	tw.tween_property(l, "modulate:a", 0.0, 0.25)
+	tw.parallel().tween_property(l, "outline_modulate:a", 0.0, 0.25)
 	tw.tween_callback(l.queue_free)
 
 

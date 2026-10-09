@@ -62,7 +62,7 @@ var prediction_target := Vector3.ZERO
 var stats := {
 	"passes": 0, "passes_done": 0, "shots": 0, "on_target": 0, "goals": 0, "tackles": 0,
 	"interceptions": 0, "saves": 0, "outs": 0, "fouls": 0, "specials": 0, "skill_moves": 0,
-	"dribbles": 0, "feints": 0, "woodwork": 0, "headers": 0,
+	"dribbles": 0, "feints": 0, "woodwork": 0, "headers": 0, "tackle_attempts": 0, "evades": 0, "resists": 0,
 }
 
 var _pass_marker: MeshInstance3D
@@ -142,6 +142,13 @@ func ai_tackle_rate(t: Team) -> float:
 
 func tackle_bonus(t: Team) -> float:
 	return [-0.08, 0.0, 0.06][ai_level(t)]
+
+
+## Cuánto tarda la IA entre anunciar un quite ("!") y ejecutarlo.
+func ai_telegraph(t: Team) -> float:
+	if human == null or t == human.team:
+		return 0.12
+	return [0.28, 0.2, 0.14][ai_level(t)]
 
 
 func gk_reaction(t: Team) -> float:
@@ -262,10 +269,13 @@ func _physics_process(dt: float) -> void:
 			if not c.restart_lock:
 				ball.kick(c, ball.carry_vel, "carry")
 	if ball.carrier == null:
-		ball.step(dt)
 		var was_in := ball.in_goal
-		ball.collide_goal(1.0, hl, gw, gh, gdepth)
-		ball.collide_goal(-1.0, hl, gw, gh, gdepth)
+		# Subpasos para que un tiro fuerte no atraviese el palo
+		var n := clampi(ceili(ball.velocity.length() * dt / 0.08), 1, 8)
+		for _i in n:
+			ball.step(dt / n)
+			ball.collide_goal(1.0, hl, gw, gh, gdepth)
+			ball.collide_goal(-1.0, hl, gw, gh, gdepth)
 		if phase == Phase.PLAY or phase == Phase.RESTART:
 			if not was_in and ball.in_goal:
 				_goal(signf(ball.position.x))
@@ -553,11 +563,14 @@ func _goal(side: float) -> void:
 	stats["goals"] += 1
 	var scorer := ball.last_touch
 	var own_goal := scorer != null and scorer.team != scoring
+	for mate in scoring.players:
+		mate.gain_energy(SkillDB.GAIN["team_goal"])
 	if scorer != null and not own_goal:
 		scorer.gain_energy(SkillDB.GAIN["goal"])
 		var passer := ball.last_passer
 		if passer != null and passer != scorer and passer.team == scoring:
 			passer.gain_energy(SkillDB.GAIN["assist"])
+			FX.popup(passer.position, "¡ASISTENCIA!", scoring.color.lightened(0.5), 0.8)
 	_kickoff_team = scoring.opponent.id
 	_set_phase(Phase.GOAL)
 	for p in players:

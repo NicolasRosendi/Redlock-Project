@@ -12,6 +12,10 @@ Motor: **Godot 4.3+** (GDScript). Gráficos sencillos generados por código: no 
 |---|---|---|
 | ![Quite](docs/img/quite.jpg) | ![Barrida](docs/img/barrida.jpg) | ![Estirada](docs/img/estirada.jpg) |
 
+| La IA avisa el quite con "!" | Esquivar un quite |
+|---|---|
+| ![Aviso](docs/img/aviso_quite.jpg) | ![Esquiva](docs/img/esquiva.jpg) |
+
 ## Cómo jugar
 
 1. Instala [Godot 4.3 o superior](https://godotengine.org/download) (versión estándar, no hace falta la de .NET).
@@ -71,15 +75,22 @@ Select [C] cámara (TV / detrás del jugador), Start [Esc] pausa, R3 [R] cambiar
 ## Sistemas implementados
 
 - **Estamina vs. energía.** La *estamina* se gasta al correr, marcar, chocar, saltar y regatear; al dejar de correr se recupera,
-  pero **solo hasta un tope que baja con el cansancio** (la línea blanca de la barra). La *energía* (5 barras) se gana jugando:
-  pases completados, quites, intercepciones, tiros al arco, regates, atajadas, goles y asistencias.
+  pero **solo hasta un tope que baja con el cansancio** (la línea blanca de la barra). La *energía* (5 barras de 100) se gana
+  jugando; lo que más da: **gol 160** (+20 a todo el equipo), **asistencia 90**, **regate que deja atrás al rival 40**
+  (55 si fue un regate con L2), **esquivar un quite 30**, atajada 30, quite/intercepción 25. Se muestra sobre tu jugador.
+- **Cuando te quieren quitar el balón**: la IA avisa con un **"!" rojo** un instante antes de entrar; si esquivas (amague,
+  recorte, elástica...) aparece "¡ESQUIVA!" y el defensor queda descolocado; si aguantas, "¡RESISTE!"; si te la quitan, caes.
+  Cada regate tiene su pose (amago de cuerpo en el recorte, pie por fuera y por dentro en la elástica, suela en el arrastre,
+  taco en el sombrero) y deja estela.
 - **Despertar (transformación)** durante 20 s, seis tipos: *Ego Cañonero* (tiro), *Cuerpo de Acero* (fuerza y resistencia),
   *Alas de Cóndor* (salto, cabezazos y voleas), *Velocidad Divina*, *Metavisión Predictiva* (marca dónde caerá el balón y una ruta;
   seguirla te acelera) y *Visión Espacial* (radar con el balón y las intenciones de los rivales; tus pases son más difíciles de cortar).
 - **Física de balón propia**: rebote, rozamiento, resistencia del aire, curva por efecto (Magnus), caída por *topspin* y *knuckle*.
   Gravedad algo aumentada para que el balón no "flote" en la cámara de TV.
-- **Conducción por toques**: el jugador empuja el balón, que rueda delante hasta el siguiente toque (al esprintar se aleja más).
-  Las recepciones amortiguan el pase en lugar de pegar el balón al pie.
+- **Conducción pegada al pie**: el balón va siempre delante, en la dirección en la que mira tu jugador (≈0,3–0,7 m al trote,
+  hasta ≈1 m esprintando), con toques visibles. Con balón, el cuerpo gira hacia donde apuntas y en los giros bruscos el
+  jugador recoge el balón al pie. Las recepciones amortiguan el pase en lugar de pegar el balón al pie.
+- **Palos y travesaño**: el balón rebota según el ángulo con el que llega y el gol solo cuenta si cruza **entera** la línea.
 - **Pases y tiros "giroscopio"**: salen hacia el stick; un solver calcula el efecto para que la curva termine en el compañero.
 - **Lectura clara de las jugadas**: avisos grandes sobre la jugada (¡QUITE!, ¡ATAJADA!, ¡CORTADO!, ¡FALTA!...), congelado breve
   en los impactos, jugadores que caen al perder un duelo, guantes del portero y polvo en las barridas.

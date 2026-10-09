@@ -10,12 +10,15 @@ var t := 0
 var failures := 0
 var held: Array[String] = []
 var log_lines: Array[String] = []
+var max_dist := 0.0
+var min_along := 9.0
+var e0 := 0.0
 
 const STEPS := [
 	"pass", "gyro_pass_nearest", "gyro_pass_curve", "through_space", "shot", "shot_on_target", "shot_wide",
 	"overpower", "curve_shot", "ground_shot", "feint", "chip", "dribble_cut", "dribble_elastic", "sombrero",
 	"special_shot", "special_pass", "special_dribble", "awaken", "special_curve", "tackle", "slide", "poke", "arm",
-	"special_tackle", "team_switch", "stamina",
+	"special_tackle", "team_switch", "close_control", "post_bounce", "goal_energy", "telegraph", "stamina",
 ]
 
 
@@ -309,6 +312,72 @@ func _physics_process(_dt: float) -> void:
 				_check("modo Equipo: toque de L1 cambia de jugador", nw.player_name != log_lines[-1], "%s → %s" % [log_lines[-1], nw.player_name])
 				GameConfig.control_mode = GameConfig.ControlMode.PRO
 				m.human.switch_to(m.teams[0].players[m.teams[0].players.size() - 1])
+				done = true
+		"close_control":
+			if t == 1:
+				_clear_mates()
+				h.position = Vector3(-10, 0, 0)
+				b.place(h.position + Vector3.RIGHT * 0.4)
+				b.set_carrier(h)
+				max_dist = 0.0
+				min_along = 9.0
+			if t == 2: _press("sprint"); _press("move_right")
+			if t == 60: _release("move_right"); _press("move_up")
+			if t == 100: _release("move_up"); _press("move_down")
+			if t == 140: _release("move_down"); _press("move_left")
+			if t > 20 and b.carrier == h:
+				var rel := h.flat_to(b.position)
+				max_dist = maxf(max_dist, rel.length())
+				if (t > 80 and t < 100) or (t > 125 and t < 140) or t > 165:
+					min_along = minf(min_along, rel.dot(h.facing))
+				if OS.get_environment("CCDEBUG") != "":
+					print("t=%d along=%.2f lat=%.2f face=%s vel=%s state=%d" % [t, rel.dot(h.facing), rel.dot(h.facing.cross(Vector3.UP)), h.facing, h.velocity, h.state])
+			if t == 180:
+				_release("sprint"); _release("move_left")
+				_check("control cercano: el balón no se aleja ni se va de lado", b.carrier == h and max_dist < 1.3 and min_along > -0.1,
+					"distancia máx %.2fm · mínimo delante %.2fm" % [max_dist, min_along])
+				done = true
+		"post_bounce":
+			if t == 1:
+				m.teams[1].gk().position = Vector3(m.hl - 1.0, 0, -m.gw * 0.5 + 0.5)
+				m.teams[1].gk().frozen = true
+				b.place(Vector3(m.hl - 4.0, 1.0, m.gw * 0.5))
+				b.kick(h, Vector3(26.0, 0.0, 0.0), "shot")
+				b.position.y = 1.0
+			if t == 30:
+				_check("tiro al palo rebota hacia afuera y no es gol", m.phase != Match.Phase.GOAL and not b.in_goal and b.velocity.x < 0.0,
+					"vel=(%.1f, %.1f) fase=%d" % [b.velocity.x, b.velocity.z, m.phase])
+				m.teams[1].gk().frozen = false
+				done = true
+		"goal_energy":
+			if t == 1:
+				h.energy = 0.0
+				m.teams[1].gk().position = Vector3(m.hl - 1.0, 0, 0)
+				m.teams[1].gk().frozen = true
+				b.place(Vector3(m.hl - 3.0, 0.8, 2.0))
+				b.kick(h, Vector3(20.0, 0.0, 0.0), "shot")
+				b.position.y = 0.8
+			if t == 40:
+				_check("gol limpio cuenta y da mucha energía", m.phase == Match.Phase.GOAL and h.energy >= 170.0, "energía=%.0f" % h.energy)
+				m.teams[1].gk().frozen = false
+			if t == 260:
+				done = true
+		"telegraph":
+			if t == 1:
+				var o := _give_opp_ball(5.0)
+				var d2 := m.teams[1].players[2]
+				d2.frozen = true
+				d2.position = h.position + Vector3(0, 0, 1.2)
+				m.ball.place(h.position + Vector3.RIGHT * 0.4)
+				m.ball.set_carrier(h)
+				d2.frozen = false
+				d2.prepare_tackle("tackle", 0.3)
+			if t == 6:
+				var d3 := m.teams[1].players[2]
+				log_lines.append(str(d3._alert.visible))
+			if t == 22:
+				var d4 := m.teams[1].players[2]
+				_check("la IA avisa el quite con '!' y luego entra", log_lines[-1] == "true" and d4.state == Player.State.TACKLE, "aviso=%s estado=%d" % [log_lines[-1], d4.state])
 				done = true
 		"tackle":
 			if t == 1:
